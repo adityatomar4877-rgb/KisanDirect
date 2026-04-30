@@ -8,6 +8,7 @@ import { MapPin, Search, Plus, Star, ShieldCheck, CheckCircle2, Clock, Truck, Mi
 import Svg, { Path, Circle, Line, Rect, Text as SvgText, Polyline, Defs, LinearGradient, Stop } from 'react-native-svg';
 import * as ImagePicker from 'expo-image-picker';
 import Constants from 'expo-constants';
+import LoginScreen, { ROLE_CONFIG } from './Loginscreen.js';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -1182,7 +1183,15 @@ export default function App() {
   return (
     <View style={styles.mainWrapper}>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.background} />
-      {currentScreen === 'onboarding' && <OnboardingScreen />}
+      {currentScreen === 'onboarding' && (
+        <LoginScreen
+          language={language}
+          onLogin={(role, user) => {
+            setRole(role);
+            navigateTo(ROLE_CONFIG[role].screen);
+          }}
+        />
+      )}
       {currentScreen === 'farmerDashboard' && <FarmerDashboard />}
       {currentScreen === 'addProduct' && <AddProductScreen />}
       {currentScreen === 'buyerMarketplace' && <BuyerMarketplace />}
