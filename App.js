@@ -9,6 +9,7 @@ import Svg, { Path, Circle, Line, Rect, Text as SvgText, Polyline, Defs, LinearG
 import * as ImagePicker from 'expo-image-picker';
 import Constants from 'expo-constants';
 import LoginScreen, { ROLE_CONFIG } from './Loginscreen.js';
+import NearbyMandi from './NearbyMandi';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -212,35 +213,6 @@ export default function App() {
   };
 
   // ─────────────────────────────────────────────
-  //  SCREEN: ONBOARDING
-  // ─────────────────────────────────────────────
-  const OnboardingScreen = () => (
-    <ScrollView contentContainerStyle={styles.containerCenter}>
-      <View style={styles.langToggle}>
-        <TouchableOpacity style={[styles.langBtn, language === 'en' && styles.langBtnActive]} onPress={() => setLanguage('en')}>
-          <Text style={[styles.langBtnText, language === 'en' && styles.langBtnTextActive]}>English</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.langBtn, language === 'hi' && styles.langBtnActive]} onPress={() => setLanguage('hi')}>
-          <Text style={[styles.langBtnText, language === 'hi' && styles.langBtnTextActive]}>हिंदी</Text>
-        </TouchableOpacity>
-      </View>
-      <View style={styles.logoContainer}>
-        <Text style={styles.logoText}>KisanDirect</Text>
-        <Text style={styles.tagline}>{t('Farm to Fork, Directly.', 'खेत से आपकी थाली तक, सीधे।')}</Text>
-      </View>
-      <Text style={styles.roleTitle}>{t('Who are you?', 'आप कौन हैं?')}</Text>
-      <TouchableOpacity style={styles.roleCard} onPress={() => { setRole('farmer'); navigateTo('farmerDashboard'); }}>
-        <View style={styles.roleIconBg}><Text style={styles.roleIcon}>🚜</Text></View>
-        <Text style={styles.roleCardText}>{t('I am a Farmer', 'मैं एक किसान हूँ')}</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={styles.roleCard} onPress={() => { setRole('buyer'); navigateTo('buyerMarketplace'); }}>
-        <View style={styles.roleIconBg}><Text style={styles.roleIcon}>🛒</Text></View>
-        <Text style={styles.roleCardText}>{t('I am a Buyer', 'मैं एक खरीदार हूँ')}</Text>
-      </TouchableOpacity>
-    </ScrollView>
-  );
-
-  // ─────────────────────────────────────────────
   //  SCREEN: FARMER DASHBOARD
   // ─────────────────────────────────────────────
   const FarmerDashboard = () => (
@@ -283,6 +255,14 @@ export default function App() {
             </View>
             <Text style={styles.cardSubText}>{t('Tomatoes and Onions are selling fast!', 'टमाटर और प्याज तेजी से बिक रहे हैं!')}</Text>
           </View>
+          {/* NearbyMandi card from file 2 */}
+          <TouchableOpacity style={styles.card} onPress={() => navigateTo('nearbyMandi')}>
+            <View style={styles.rowBetween}>
+              <Text style={styles.cardTitle}>{t('Find Nearby Mandi', 'नज़दीकी मंडी खोजें')}</Text>
+              <Text style={styles.productEmoji}>🏪</Text>
+            </View>
+            <Text style={styles.cardSubText}>{t('Check mandi prices and distance', 'मंडी की कीमतें और दूरी जांचें')}</Text>
+          </TouchableOpacity>
           <Text style={styles.sectionTitle}>{t('My Products', 'मेरे उत्पाद')}</Text>
           <View style={styles.productListItem}>
             <Text style={styles.productEmoji}>🍅</Text>
@@ -643,12 +623,10 @@ export default function App() {
     const maxPrice = Math.max(...prices);
     const minPrice = Math.min(...prices);
 
-    // Current price: prefer live API modal_price, else last chart point
     const currentPrice = livePrice ? Math.round(livePrice.modal_price) : prices[prices.length - 1];
     const prevPrice = prices[prices.length - 2];
     const recentTrend = prices[7] - prices[5];
 
-    // SVG chart
     const CHART_W = SCREEN_WIDTH - 80;
     const CHART_H = 160;
     const PAD_L = 36, PAD_R = 12, PAD_T = 16, PAD_B = 28;
@@ -696,7 +674,6 @@ export default function App() {
         </View>
 
         <ScrollView contentContainerStyle={styles.scrollContent}>
-
           {/* ── LIVE PRICE BANNER ── */}
           <View style={styles.livePriceBanner}>
             <View style={{ flex: 1 }}>
@@ -971,6 +948,14 @@ export default function App() {
         </TouchableOpacity>
       </View>
       <ScrollView contentContainerStyle={styles.scrollContent}>
+        {/* NearbyMandi card from file 2 */}
+        <TouchableOpacity style={[styles.card, { marginTop: 0, marginBottom: 20, padding: 20 }]} onPress={() => navigateTo('nearbyMandi')}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.cardTitle}>{t('Find Nearby Mandi', 'नज़दीकी मंडी खोजें')}</Text>
+            <Text style={{ fontSize: 24 }}>🏪</Text>
+          </View>
+          <Text style={styles.cardSubText}>{t('Check local mandi prices & status', 'स्थानीय मंडी की कीमतें और स्थिति जांचें')}</Text>
+        </TouchableOpacity>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
           {['All', 'Vegetables', 'Fruits', 'Grains', '< 5km'].map((f, i) => (
             <TouchableOpacity key={i} style={[styles.filterChip, selectedFilter === i && styles.filterChipActive]} onPress={() => setSelectedFilter(i)}>
@@ -1203,6 +1188,7 @@ export default function App() {
       {currentScreen === 'agriStore' && <AgriStore />}
       {currentScreen === 'farmingNews' && <FarmingNews />}
       {currentScreen === 'priceHistory' && <PriceHistory />}
+      {currentScreen === 'nearbyMandi' && <NearbyMandi navigateTo={navigateTo} t={t} role={role} />}
     </View>
   );
 }
@@ -1341,8 +1327,7 @@ const styles = StyleSheet.create({
   newsTime: { fontSize: 12, color: COLORS.textLight, marginLeft: 'auto' },
   newsTitle: { fontSize: 14, fontWeight: 'bold', color: COLORS.text, lineHeight: 20, marginBottom: 8 },
   newsReadMore: { fontSize: 13, color: COLORS.primary, fontWeight: 'bold' },
-
-  // ── Live Price Banner (NEW) ──
+  // ── Live Price Banner ──
   livePriceBanner: { backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 20, borderWidth: 1.5, borderColor: COLORS.primaryLight, flexDirection: 'row', alignItems: 'center' },
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#2e7d32', marginRight: 6 },
   livePriceLabel: { fontSize: 12, color: COLORS.primary, fontWeight: 'bold' },
@@ -1350,31 +1335,26 @@ const styles = StyleSheet.create({
   livePriceRange: { fontSize: 12, color: COLORS.textLight, marginTop: 2 },
   livePriceError: { fontSize: 13, color: '#d32f2f', marginTop: 4 },
   refreshBtn: { padding: 8 },
-
   // ── Crop Pill ──
   cropPill: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 9, borderRadius: 20, borderWidth: 1.5, borderColor: COLORS.border, backgroundColor: '#fff', marginRight: 10, gap: 6 },
   cropPillActive: { borderColor: COLORS.primary, backgroundColor: COLORS.primaryBg },
   cropPillText: { fontSize: 14, fontWeight: 'bold', color: COLORS.textLight, marginLeft: 4 },
   cropPillTextActive: { color: COLORS.primary },
-
   // ── Price Summary ──
   priceSummaryRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16, gap: 8 },
   priceSummaryCard: { flex: 1, backgroundColor: '#fff', borderRadius: 14, padding: 10, alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
   priceSumLabel: { fontSize: 10, color: COLORS.textLight, fontWeight: 'bold', marginBottom: 4, textTransform: 'uppercase' },
   priceSumValue: { fontSize: 16, fontWeight: '900', color: COLORS.text },
   priceSumChange: { fontSize: 11, fontWeight: 'bold', marginTop: 2 },
-
   // ── Chart ──
   chartCard: { backgroundColor: '#fff', borderRadius: 20, padding: 16, borderWidth: 1, borderColor: COLORS.border, marginBottom: 20, alignItems: 'center' },
   chartTitle: { fontSize: 14, fontWeight: 'bold', color: COLORS.text, marginBottom: 12, alignSelf: 'flex-start' },
-
   // ── Price Table ──
   priceTable: { backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderColor: COLORS.border, overflow: 'hidden', marginBottom: 20 },
   priceTableHeader: { flexDirection: 'row', backgroundColor: COLORS.primaryBg, paddingVertical: 10, paddingHorizontal: 12 },
   priceTableHeaderText: { fontWeight: 'bold', color: COLORS.primary, fontSize: 12 },
   priceTableRow: { flexDirection: 'row', paddingVertical: 10, paddingHorizontal: 12, borderTopWidth: 1, borderTopColor: '#f5f5f5' },
   priceTableCell: { flex: 1, fontSize: 13, color: COLORS.textLight, textAlign: 'center' },
-
   // ── AI Advisor ──
   aiAdvisorBox: { backgroundColor: '#f3e5f5', borderRadius: 20, padding: 20, marginBottom: 16 },
   aiAdvisorTitle: { fontSize: 17, fontWeight: 'bold', color: '#6a1b9a', marginBottom: 8 },
