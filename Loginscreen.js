@@ -13,8 +13,7 @@ import {
     FlatList,
 } from 'react-native';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
-import { auth, db } from './firebaseConfig';
+import { auth, saveUserProfile, updateUserProfile } from './firebaseConfig';
 
 // ─────────────────────────────────────────────
 //  TRANSLATIONS
@@ -233,18 +232,31 @@ export default function LoginScreen({ onLogin, language = 'en', onLanguageChange
 
         const email = `${phone}@kisandirect.app`; // use phone as email key
         try {
-          if (isSignUp) {
-            const cred = await createUserWithEmailAndPassword(auth, email, password);
-            await setDoc(doc(db, 'users', cred.user.uid), {
-              name, phone, role: selectedRole, createdAt: new Date(), language,
-            });
-          } else {
-            const cred = await signInWithEmailAndPassword(auth, email, password);
-            await setDoc(doc(db, 'users', cred.user.uid), { language }, { merge: true });
-          }
-          onLogin(selectedRole, { name, phone, language });
+            if (isSignUp) {
+                const cred = await createUserWithEmailAndPassword(auth, email, password);
+                await saveUserProfile(cred.user.uid, {
+                    name, phone, role: selectedRole, language,
+                    createdAt: new Date().toISOString(),
+                });
+                onLogin(selectedRole, { uid: cred.user.uid, name, phone, role: selectedRole, language });
+            } else {
+                const cred = await signInWithEmailAndPassword(auth, email, password);
+                await updateUserProfile(cred.user.uid, { language });
+                
+                // Fetch existing profile to get the stored name
+                const { getUserProfile } = require('./firebaseConfig');
+                const profile = await getUserProfile(cred.user.uid);
+                
+                onLogin(selectedRole, { 
+                    uid: cred.user.uid, 
+                    name: profile?.name || '', 
+                    phone, 
+                    role: profile?.role || selectedRole, 
+                    language 
+                });
+            }
         } catch (err) {
-          Alert.alert('Error', err.message);
+            Alert.alert('Error', err.message);
         } finally { setLoading(false); }
     };
 

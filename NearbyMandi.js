@@ -37,8 +37,9 @@ export default function NearbyMandi({ navigateTo, t, role }) {
       let locationData = await Location.getCurrentPositionAsync({});
       let lat = locationData.coords.latitude;
       let lon = locationData.coords.longitude;
-      setUserCoords({ lat, lon });
-      
+      const freshCoords = { lat, lon };
+      setUserCoords(freshCoords);
+
       let locName = '';
       try {
         let geocode = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
@@ -66,10 +67,10 @@ export default function NearbyMandi({ navigateTo, t, role }) {
           console.log('Nominatim reverse geocode error:', e);
         }
       }
-      
+
       if (locName) {
         setLocation(locName);
-        locateMandiWithCity(locName);
+        locateMandiWithCity(locName, freshCoords);
       } else {
         alert(t ? t('Could not find city name. Please enter it manually.', 'शहर का नाम नहीं मिल सका। कृपया इसे मैन्युअल रूप से दर्ज करें।') : 'Could not find city name. Please enter it manually.');
       }
@@ -85,37 +86,27 @@ export default function NearbyMandi({ navigateTo, t, role }) {
     const R = 6371; // km
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-              Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return (R * c).toFixed(1);
   };
 
-  const locateMandiWithCity = async (cityToSearch) => {
+  const locateMandiWithCity = async (cityToSearch, coordsOverride) => {
     if (!cityToSearch.trim()) return;
     setLoading(true);
     setHasSearched(false);
-    
-    let data = [];
-    try {
-      // 1. Fetch live market locations using OpenStreetMap Nominatim
-      const query = `market in ${cityToSearch}`;
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=15`, {
-        headers: { 'User-Agent': 'KisanDirect/1.0 (contact@kisandirect.app)' }
-      });
-      if (response.ok) {
-        data = await response.json();
-      } else {
-        console.warn("Nominatim API non-OK status");
-      }
-    } catch (error) {
-      console.warn("Nominatim fetch error:", error);
-    }
-      
+
+    // ── Step 1: Resolve user coordinates FIRST, before any API call ──
+    // This ensures distances are always accurate on both web and mobile.
     let userLat, userLon;
     try {
-      if (userCoords) {
+      if (coordsOverride) {
+        // Passed directly from getCurrentLocation() to avoid React stale-state on mobile
+        userLat = coordsOverride.lat;
+        userLon = coordsOverride.lon;
+      } else if (userCoords) {
         userLat = userCoords.lat;
         userLon = userCoords.lon;
       } else {
@@ -124,7 +115,27 @@ export default function NearbyMandi({ navigateTo, t, role }) {
         userLon = loc.coords.longitude;
         setUserCoords({ lat: userLat, lon: userLon });
       }
-    } catch(e) {}
+    } catch (e) { console.warn("Could not get user coords in locateMandiWithCity:", e); }
+
+    // ── Step 2: Fetch live market locations from OpenStreetMap Nominatim ──
+    let data = [];
+    try {
+      const query = `market in ${cityToSearch}`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000); // 8s timeout for mobile
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=15`, {
+        headers: { 'User-Agent': 'KisanDirect/1.0 (contact@kisandirect.app)' },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (response.ok) {
+        data = await response.json();
+      } else {
+        console.warn("Nominatim API non-OK status");
+      }
+    } catch (error) {
+      console.warn("Nominatim fetch error:", error);
+    }
 
     let results = [];
     if (data && data.length > 0) {
@@ -138,12 +149,17 @@ export default function NearbyMandi({ navigateTo, t, role }) {
       ];
     }
 
-    // Map to our UI format
+    // ── Step 3: Map results to UI format ──
+    // Use a seeded value per item so open/price stay consistent across re-renders.
     const liveResults = results.map((item, index) => {
-      let dist = userLat ? getDistance(userLat, userLon, parseFloat(item.lat), parseFloat(item.lon)) : (Math.random() * 10 + 1).toFixed(1);
-      
-      let isOpen = Math.random() > 0.2;
-      let price = Math.floor(Math.random() * 50) + 20;
+      let dist = (userLat && userLon)
+        ? getDistance(userLat, userLon, parseFloat(item.lat), parseFloat(item.lon))
+        : '--';
+
+      // Deterministic open/price based on place_id hash so it doesn't re-randomize on re-render
+      const seed = String(item.place_id || index).split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
+      let isOpen = (seed % 5) !== 0;           // ~80% open, stable per place
+      let price = 20 + (seed % 50);            // ₹20–₹69, stable per place
 
       return {
         id: item.place_id || index,
@@ -180,7 +196,7 @@ export default function NearbyMandi({ navigateTo, t, role }) {
     if (userCoords) {
       url += `&origin=${userCoords.lat},${userCoords.lon}`;
     }
-    
+
     if (Platform.OS === 'web') {
       window.open(url, '_blank');
     } else {
@@ -204,9 +220,9 @@ export default function NearbyMandi({ navigateTo, t, role }) {
         <View style={styles.searchContainer}>
           <TouchableOpacity onPress={getCurrentLocation} style={styles.gpsBtn}>
             {gpsLoading ? (
-               <ActivityIndicator size="small" color={COLORS.primary} />
+              <ActivityIndicator size="small" color={COLORS.primary} />
             ) : (
-               <Navigation color={COLORS.primary} size={20} />
+              <Navigation color={COLORS.primary} size={20} />
             )}
           </TouchableOpacity>
           <TextInput
@@ -239,16 +255,16 @@ export default function NearbyMandi({ navigateTo, t, role }) {
                   <TouchableOpacity key={mandi.id} style={styles.mandiCard} onPress={() => openDirections(mandi)}>
                     <View style={styles.mandiInfo}>
                       <Text style={styles.mandiName}>{mandi.name}</Text>
-                      <View style={{flexDirection: 'row', alignItems: 'center', marginTop: 4}}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
                         <MapPin size={12} color={COLORS.textLight} />
                         <Text style={styles.mandiDistance}> {mandi.city}, {mandi.state} • {mandi.distance}</Text>
                       </View>
                       <Text style={styles.mandiPrice}>{t ? t('Avg Price:', 'औसत मूल्य:') : 'Avg Price:'} {mandi.price}</Text>
                     </View>
                     <View style={[styles.statusBadge, mandi.open ? styles.statusOpen : styles.statusClosed]}>
-                      <Text style={[styles.statusText, mandi.open ? {color: '#2e7d32'} : {color: '#d32f2f'}]}>
-                        {mandi.open 
-                          ? (t ? t('Open', 'खुला है') : 'Open') 
+                      <Text style={[styles.statusText, mandi.open ? { color: '#2e7d32' } : { color: '#d32f2f' }]}>
+                        {mandi.open
+                          ? (t ? t('Open', 'खुला है') : 'Open')
                           : (t ? t('Closed', 'बंद है') : 'Closed')}
                       </Text>
                     </View>

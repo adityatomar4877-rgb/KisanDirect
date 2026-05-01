@@ -10,8 +10,14 @@ import {
 import { MapPin, Search, Plus, Star, ShieldCheck, CheckCircle2, Clock, Truck, Mic, Image as ImageIcon, TrendingUp, Package, Users, BarChart2 } from 'lucide-react-native';
 import Svg, { Path, Circle, Line, Text as SvgText, Polyline, Defs, LinearGradient, Stop } from 'react-native-svg';
 import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
 import Constants from 'expo-constants';
-import { auth, db } from './firebaseConfig';
+import {
+  auth, db, saveUserProfile, getUserProfile, updateUserProfile,
+  addListing, getFarmerListings, getAllListings, updateListing, deleteListing,
+  placeOrder as fbPlaceOrder, getBuyerOrders, getFarmerOrders, updateOrderStatus,
+  sendNegotiationMessage, listenNegotiationMessages,
+} from './firebaseConfig';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import LoginScreen, { ROLE_CONFIG } from './Loginscreen.js';
@@ -127,18 +133,18 @@ const useTranslation = (language) => {
   const t = useCallback((enText, hiText) => {
     if (!enText) return '';
     if (language === 'en') return enText;
-    
+
     // Quick fallback check inside our predefined hardcoded global translations
     const globalKey = Object.keys(GLOBAL_TRANSLATIONS).find(k => GLOBAL_TRANSLATIONS[k].en === enText || k === enText);
     if (globalKey && GLOBAL_TRANSLATIONS[globalKey][language]) {
       return GLOBAL_TRANSLATIONS[globalKey][language];
     }
-    
+
     // Special fallback for Hindi if hardcoded in component
     if (language === 'hi' && hiText) return hiText;
 
     const cacheKey = `${language}_${enText}`;
-    
+
     // If we have it in cache, return it immediately
     if (translationCache[cacheKey]) {
       return translationCache[cacheKey];
@@ -148,7 +154,7 @@ const useTranslation = (language) => {
     if (translationCache[cacheKey] === undefined) {
       // Set an optimistic fallback (Hindi if available, else English) to avoid infinite re-renders
       translationCache[cacheKey] = hiText || enText;
-      
+
       fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=${language}&dt=t&q=${encodeURIComponent(enText)}`)
         .then(res => res.json())
         .then(json => {
@@ -202,13 +208,17 @@ export default function App() {
   const [livePriceError, setLivePriceError] = useState(null);
   const [priceData, setPriceData] = useState(MOCK_PRICE_DATA);
   const [farmerSearch, setFarmerSearch] = useState('');
+  const [selectedFarmer, setSelectedFarmer] = useState(null);
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [offerPrice, setOfferPrice] = useState('');
+  const [chatMessages, setChatMessages] = useState([]);
+  const [orderPlaced, setOrderPlaced] = useState(null);
 
-  // ── Listings state — used by Add Product & Dashboard ──────────────────
-  const [myListings, setMyListings] = useState([
-    { emoji: '🍅', name: 'Fresh Tomatoes', nameHi: 'ताजे टमाटर', price: '₹ 40/kg', qty: '50 kg', trend: '+₹2' },
-    { emoji: '🧅', name: 'Red Onions', nameHi: 'लाल प्याज', price: '₹ 30/kg', qty: '120 kg', trend: '-₹1' },
-    { emoji: '🌾', name: 'Wheat', nameHi: 'गेहूं', price: '₹ 22/kg', qty: '200 kg', trend: '=' },
-  ]);
+  // ── Listings state — synced with Firestore ───────────────────────────
+  const [myListings, setMyListings] = useState([]);
+  const [marketListings, setMarketListings] = useState([]);
+  const [myOrders, setMyOrders] = useState([]);
+  const [listingsLoading, setListingsLoading] = useState(false);
 
   const t = useTranslation(language);
   const navigateTo = (screen) => setCurrentScreen(screen);
@@ -218,20 +228,49 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser && !currentUser) {
         try {
-          const snap = await getDoc(doc(db, 'users', firebaseUser.uid));
-          if (snap.exists()) {
-            const data = snap.data();
-            setCurrentUser({ uid: firebaseUser.uid, ...data });
-            setLanguage(data.language || 'en');
-            const userRole = data.role;
-            setRole(userRole);
-            navigateTo(ROLE_CONFIG[userRole].screen);
+          const profile = await getUserProfile(firebaseUser.uid);
+          if (profile) {
+            setCurrentUser(profile);
+            setLanguage(profile.language || 'en');
+            setRole(profile.role);
+            navigateTo(ROLE_CONFIG[profile.role].screen);
+            // Load data based on role
+            loadUserData(firebaseUser.uid, profile.role);
           }
-        } catch (e) { /* stay on onboarding */ }
+        } catch (e) { console.warn('Auth load error:', e); }
       }
     });
     return () => unsubscribe();
   }, []);
+
+  // Load listings and orders from Firestore after login
+  const loadUserData = async (uid, userRole) => {
+    setListingsLoading(true);
+    try {
+      if (userRole === 'farmer') {
+        const listings = await getFarmerListings(uid);
+        setMyListings(listings.map(l => ({
+          id: l.id,
+          emoji: l.emoji || '🌿',
+          name: l.cropName,
+          nameHi: l.cropName,
+          price: `₹ ${l.pricePerKg}/kg`,
+          qty: `${l.qty} kg`,
+          trend: '=',
+          farmerUid: l.farmerUid,
+        })));
+        const orders = await getFarmerOrders(uid);
+        setMyOrders(orders);
+      } else {
+        // buyer / retailer — load marketplace listings
+        const listings = await getAllListings();
+        setMarketListings(listings);
+        const orders = await getBuyerOrders(uid);
+        setMyOrders(orders);
+      }
+    } catch (e) { console.warn('loadUserData error:', e); }
+    setListingsLoading(false);
+  };
 
   const fetchLivePrice = useCallback(async (crop) => {
     setLivePriceLoading(true); setLivePriceError(null); setLivePrice(null);
@@ -748,7 +787,14 @@ export default function App() {
                   { name: t('Onions', 'प्याज'), price: '32', dist: '4.1 km', farmer: 'Suresh Patel', emoji: '🧅', rating: 4.6 },
                   { name: t('Chilli', 'मिर्च'), price: '95', dist: '5.8 km', farmer: 'Meena Devi', emoji: '🌶️', rating: 4.7 },
                 ].map((item, i) => (
-                  <TouchableOpacity key={i} style={S.productCard} onPress={() => navigateTo('productDetail')} activeOpacity={0.88}>
+                  <TouchableOpacity key={i} style={S.productCard} onPress={() => {
+                    const matchedFarmer = NEARBY_FARMERS.find(f => f.name === item.farmer) || { name: item.farmer, dist: item.dist, rating: item.rating, reviews: 0, crops: [item.emoji + ' ' + item.name], verified: true, avatar: item.farmer.split(' ').map(w => w[0]).join(''), deliveries: 0, price: '₹' + item.price + '/kg' };
+                    setSelectedFarmer(matchedFarmer);
+                    setSelectedProduct(item);
+                    setChatMessages([{ from: 'farmer', text: t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।') + ' ' + item.emoji + ' ' + item.name + ' @ ₹' + item.price + '/kg' }]);
+                    setOfferPrice('');
+                    navigateTo('productDetail');
+                  }} activeOpacity={0.88}>
                     <View style={[S.productCardEmoji, { backgroundColor: COLORS.primaryBg }]}>
                       <Text style={{ fontSize: 36 }}>{item.emoji}</Text>
                     </View>
@@ -782,11 +828,15 @@ export default function App() {
               </View>
               {filteredFarmers.map((farmer) => (
                 <TouchableOpacity key={farmer.id} style={S.farmerCard}
-                  onPress={() => Alert.alert(
-                    farmer.name,
-                    `${t('Distance', 'दूरी')}: ${farmer.dist}\n${t('Rating', 'रेटिंग')}: ${farmer.rating}/5 (${farmer.reviews} ${t('reviews', 'समीक्षाएं')})\n${t('Crops', 'फसलें')}: ${farmer.crops.join(', ')}\n${t('Total Deliveries', 'कुल डिलीवरी')}: ${farmer.deliveries}`,
-                    [{ text: t('Contact Now', 'अभी संपर्क करें') }, { text: t('Close', 'बंद करें') }]
-                  )}
+                  onPress={() => {
+                    setSelectedFarmer(farmer);
+                    setSelectedProduct(null);
+                    setChatMessages([
+                      { from: 'farmer', text: `${t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।')} (${farmer.crops.join(', ')})` },
+                    ]);
+                    setOfferPrice('');
+                    navigateTo('productDetail');
+                  }}
                   activeOpacity={0.88}
                 >
                   <View style={[S.farmerAvatar, { backgroundColor: farmer.verified ? COLORS.primaryBg : COLORS.surfaceAlt }]}>
@@ -833,7 +883,15 @@ export default function App() {
                       )}
                       <TouchableOpacity
                         style={[S.contactBtn, { borderColor: BC, backgroundColor: BC + '0D' }]}
-                        onPress={() => Alert.alert(t('Buy Now', 'खरीदें'), `${t('Contacting', 'संपर्क कर रहे हैं')} ${farmer.name}...`)}
+                        onPress={() => {
+                          setSelectedFarmer(farmer);
+                          setSelectedProduct(null);
+                          setChatMessages([
+                            { from: 'farmer', text: `${t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।')} (${farmer.crops.join(', ')})` },
+                          ]);
+                          setOfferPrice('');
+                          navigateTo('productDetail');
+                        }}
                       >
                         <Text style={[S.contactBtnText, { color: BC }]}>{t('Buy Now', 'खरीदें')}</Text>
                       </TouchableOpacity>
@@ -1299,27 +1357,54 @@ export default function App() {
 
     const CROP_EMOJIS = { Tomato: '🍅', Wheat: '🌾', Onion: '🧅', Potato: '🥔', Garlic: '🧄', Rice: '🍚', Maize: '🌽', Soybean: '🫘', Mustard: '🌻', Cauliflower: '🥦', Chilli: '🌶️', Cotton: '🪴' };
 
-    const submitListing = () => {
+    const [submitting, setSubmitting] = useState(false);
+
+    const submitListing = async () => {
       if (!localCrop || !localQty || !localPrice) {
         Alert.alert(t('Missing Info', 'जानकारी ज़रूरी'), t('Please fill all fields.', 'सभी फ़ील्ड भरें।'));
         return;
       }
+      const uid = currentUser?.uid || auth?.currentUser?.uid;
+      if (!uid) {
+        Alert.alert('Error', 'User ID not found. Please relogin.');
+        return;
+      }
+      setSubmitting(true);
       const emoji = CROP_EMOJIS[localCrop] || '🌿';
-      const newListing = {
-        emoji,
-        name: localCrop,
-        nameHi: localCrop,
-        price: `₹ ${localPrice}/kg`,
-        qty: `${localQty} kg`,
-        trend: '=',
-      };
-      setMyListings(prev => [newListing, ...prev]);
-      setCropImage(null); setCropName('');
-      Alert.alert(
-        t('Product Listed! 🎉', 'उत्पाद जोड़ा गया! 🎉'),
-        t('Your crop is now visible to buyers.', 'आपकी फसल अब खरीदारों को दिखेगी।'),
-        [{ text: t('Great!', 'बढ़िया!'), onPress: () => navigateTo('farmerDashboard') }]
-      );
+      try {
+        const newId = await addListing(
+          uid,
+          currentUser?.name || 'Farmer',
+          {
+            cropName: localCrop,
+            emoji,
+            pricePerKg: Number(localPrice),
+            qty: Number(localQty),
+            imageUrl: cropImage || null,
+          }
+        );
+        // Update local state immediately so dashboard refreshes without reload
+        setMyListings(prev => [{
+          id: newId,
+          emoji,
+          name: localCrop,
+          nameHi: localCrop,
+          price: `₹ ${localPrice}/kg`,
+          qty: `${localQty} kg`,
+          trend: '=',
+          farmerUid: currentUser.uid,
+        }, ...prev]);
+        setCropImage(null); setCropName('');
+        Alert.alert(
+          t('Product Listed! 🎉', 'उत्पाद जोड़ा गया! 🎉'),
+          t('Your crop is now visible to buyers.', 'आपकी फसल अब खरीदारों को दिखेगी।'),
+          [{ text: t('Great!', 'बढ़िया!'), onPress: () => navigateTo('farmerDashboard') }]
+        );
+      } catch (e) {
+        console.error('addListing error:', e);
+        Alert.alert(t('Error', 'त्रुटि'), t('Could not save listing. Please try again.', 'सहेजा नहीं जा सका। दोबारा कोशिश करें।'));
+      }
+      setSubmitting(false);
     };
 
     return (
@@ -1366,8 +1451,10 @@ export default function App() {
             <Text style={[S.infoBoxText, { color: COLORS.primaryMid }]}>{t('Nearby farmers are selling Potatoes at ₹28–32/kg. Price yours competitively!', 'आसपास के किसान आलू ₹28–32/किलो में बेच रहे हैं।')}</Text>
           </View>
 
-          <TouchableOpacity style={S.primaryBtn} onPress={submitListing} activeOpacity={0.88}>
-            <Text style={S.primaryBtnText}>{t('List My Crop', 'फसल जोड़ें')}</Text>
+          <TouchableOpacity style={[S.primaryBtn, submitting && { opacity: 0.7 }]} onPress={submitListing} disabled={submitting} activeOpacity={0.88}>
+            {submitting
+              ? <ActivityIndicator color="#fff" />
+              : <Text style={S.primaryBtnText}>{t('List My Crop', 'फसल जोड़ें')}</Text>}
           </TouchableOpacity>
         </ScrollView>
       </View>
@@ -1375,87 +1462,261 @@ export default function App() {
   };
 
   // ─── SCREEN: PRODUCT DETAIL ──────────────────────────────────────────────
-  const ProductDetail = () => (
-    <View style={S.screen}>
-      <BackHeader title={t('Product Details', 'उत्पाद विवरण')} onBack={() => navigateTo('buyerMarketplace')} />
-      <ScrollView contentContainerStyle={S.scrollPad} showsVerticalScrollIndicator={false}>
-        <View style={[S.detailHero, { backgroundColor: COLORS.primaryBg }]}><Text style={{ fontSize: 80 }}>🍅</Text></View>
-        <View style={S.formCard}>
-          <Text style={S.detailName}>{t('Fresh Tomatoes', 'ताजे टमाटर')}</Text>
-          <Text style={[S.detailPrice, { color: COLORS.primaryMid }]}>₹40 / kg</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 14, borderTopWidth: 1, borderTopColor: COLORS.borderLight }}>
-            <Text style={{ fontSize: 32, marginRight: 12 }}>👨🏽‍🌾</Text>
-            <View>
-              <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.text }}>Ramesh Singh</Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Text style={{ color: COLORS.accent, fontSize: 13 }}>★ 4.8</Text>
-                <Text style={[S.farmerMeta, { marginLeft: 6 }]}>120+ orders • 2.5 km</Text>
+  const ProductDetail = () => {
+    const BC = COLORS.buyerMid;
+    const farmer = selectedFarmer || {
+      name: 'Ramesh Singh', dist: '2.5 km', rating: 4.8, reviews: 124,
+      crops: ['🍅 Tomatoes', '🧅 Onions'], verified: true, avatar: 'RS',
+      deliveries: 230, price: '₹38–42/kg', uid: null,
+    };
+    const listing = selectedProduct || {};
+    const cropEmoji = listing.emoji || farmer.crops[0]?.split(' ')[0] || '🌾';
+    const cropName = listing.cropName || farmer.crops[0]?.split(' ').slice(1).join(' ') || 'Produce';
+    const basePrice = listing.pricePerKg || parseInt(farmer.price?.match(/\d+/) || ['40']) || 40;
+
+    // threadId is stable per buyer↔listing pair
+    const threadId = `${currentUser?.uid || 'guest'}_${listing.id || farmer.uid || farmer.name.replace(/\s/g, '')}`;
+
+    const [qty, setQty] = React.useState(1);
+    const [localOffer, setLocalOffer] = React.useState('');
+    const [localChat, setLocalChat] = React.useState([
+      { from: 'farmer', text: `${t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।')} (${farmer.crops.join(', ')})` },
+    ]);
+    const [sending, setSending] = React.useState(false);
+    const [ordering, setOrdering] = React.useState(false);
+
+    // Load existing negotiation messages from Firestore on mount
+    React.useEffect(() => {
+      let unsub;
+      try {
+        unsub = listenNegotiationMessages(threadId, (msgs) => {
+          if (msgs.length > 0) {
+            setLocalChat(msgs.map(m => ({ from: m.from, text: m.text })));
+          }
+        });
+      } catch (e) { console.warn('listenNegotiation error:', e); }
+      return () => { if (unsub) unsub(); };
+    }, [threadId]);
+
+    const sendOffer = async () => {
+      if (!localOffer.trim()) {
+        Alert.alert(t('Enter Price', 'कीमत दर्ज करें'), t('Please type your offer price first.', 'पहले अपनी कीमत टाइप करें।'));
+        return;
+      }
+      const offerNum = parseInt(localOffer);
+      setSending(true);
+      const buyerMsg = {
+        from: 'buyer',
+        senderUid: currentUser?.uid || 'guest',
+        text: `${t('I want', 'मुझे चाहिए')} ${qty} kg. ${t('Can you do', 'क्या आप दे सकते हैं')} ₹${localOffer}/kg?`,
+        offeredPrice: offerNum,
+      };
+
+      // Save buyer message to Firestore
+      try {
+        await sendNegotiationMessage(threadId, buyerMsg);
+      } catch (e) { console.warn('sendNegotiationMessage error:', e); }
+
+      const updatedChat = [...localChat, { from: buyerMsg.from, text: buyerMsg.text }];
+      setLocalChat(updatedChat);
+      setLocalOffer('');
+
+      // Simulate farmer auto-reply
+      setTimeout(async () => {
+        let replyText;
+        if (offerNum >= basePrice) {
+          replyText = `✅ ${t('Deal! I accept', 'सौदा! मैं स्वीकार करता हूँ')} ₹${localOffer}/kg ${t('for', 'के लिए')} ${qty} kg.`;
+        } else if (offerNum >= basePrice * 0.85) {
+          const counter = Math.round((offerNum + basePrice) / 2);
+          replyText = `${t('Minimum I can do is', 'न्यूनतम मैं दे सकता हूँ')} ₹${counter}/kg. ${t('Final offer!', 'अंतिम प्रस्ताव!')}`;
+        } else {
+          replyText = `${t('Sorry, my price is', 'माफ करें, मेरी कीमत है')} ₹${basePrice}/kg. ${t('Cannot go lower.', 'और कम नहीं हो सकता।')}`;
+        }
+        const farmerReply = { from: 'farmer', senderUid: farmer.uid || 'farmer', text: replyText };
+        try {
+          await sendNegotiationMessage(threadId, farmerReply);
+        } catch (e) { console.warn('farmer reply save error:', e); }
+        setLocalChat(prev => [...prev, { from: farmerReply.from, text: farmerReply.text }]);
+        setSending(false);
+      }, 1200);
+    };
+
+    const handlePlaceOrder = async (pricePerKg) => {
+      const uid = currentUser?.uid || auth?.currentUser?.uid;
+      if (!uid) {
+        Alert.alert(t('Login required', 'लॉगिन आवश्यक'), t('Please log in to place an order.', 'ऑर्डर करने के लिए लॉगिन करें।'));
+        return;
+      }
+      setOrdering(true);
+      const totalAmount = pricePerKg * qty;
+      try {
+        const orderId = await fbPlaceOrder({
+          buyerUid: uid,
+          buyerName: currentUser?.name || 'Buyer',
+          farmerUid: farmer.uid || farmer.id || 'unknown',
+          farmerName: farmer.name,
+          cropName,
+          cropEmoji,
+          qty,
+          pricePerKg,
+          totalAmount,
+          listingId: listing.id || null,
+        });
+        // Add to local orders list
+        setMyOrders(prev => [{
+          id: orderId, buyerUid: currentUser.uid, farmerName: farmer.name,
+          cropName, cropEmoji, qty, pricePerKg, totalAmount, status: 'pending',
+        }, ...prev]);
+        setOrderPlaced({ farmer, cropName, cropEmoji, qty, pricePerKg, total: totalAmount, orderId: '#' + orderId.slice(-5).toUpperCase() });
+        navigateTo('orderTracking');
+      } catch (e) {
+        console.error('placeOrder error:', e);
+        Alert.alert(t('Order Failed', 'ऑर्डर विफल'), t('Could not place order. Please try again.', 'ऑर्डर नहीं हो सका। दोबारा कोशिश करें।'));
+      }
+      setOrdering(false);
+    };
+
+    return (
+      <View style={S.screen}>
+        <BackHeader title={t('Product Details', 'उत्पाद विवरण')} onBack={() => navigateTo('buyerMarketplace')} />
+        <ScrollView contentContainerStyle={S.scrollPad} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          <View style={[S.detailHero, { backgroundColor: COLORS.primaryBg }]}><Text style={{ fontSize: 80 }}>{cropEmoji}</Text></View>
+          <View style={S.formCard}>
+            <Text style={S.detailName}>{cropName}</Text>
+            <Text style={[S.detailPrice, { color: BC }]}>₹{basePrice}/kg</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 14, borderTopWidth: 1, borderTopColor: COLORS.borderLight }}>
+              <View style={[S.farmerAvatar, { backgroundColor: COLORS.primaryBg, width: 44, height: 44 }]}>
+                <Text style={[S.farmerAvatarText, { color: COLORS.primaryMid, fontSize: 15 }]}>{farmer.avatar || '👨‍🌾'}</Text>
+              </View>
+              <View style={{ marginLeft: 12 }}>
+                <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.text }}>{farmer.name}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Text style={{ color: COLORS.accent, fontSize: 13 }}>★ {farmer.rating}</Text>
+                  <Text style={[S.farmerMeta, { marginLeft: 6 }]}>{farmer.deliveries}+ {t('orders', 'ऑर्डर')} • {farmer.dist}</Text>
+                </View>
+              </View>
+            </View>
+            {/* Qty picker */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16, backgroundColor: COLORS.primaryBg, borderRadius: 12, padding: 12 }}>
+              <Text style={{ fontWeight: '700', color: COLORS.text }}>{t('Quantity (kg)', 'मात्रा (किलो)')}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                <TouchableOpacity onPress={() => setQty(q => Math.max(1, q - 1))} style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: BC, justifyContent: 'center', alignItems: 'center' }}>
+                  <Text style={{ color: '#fff', fontSize: 20, lineHeight: 22 }}>−</Text>
+                </TouchableOpacity>
+                <Text style={{ fontSize: 20, fontWeight: '800', color: COLORS.text, minWidth: 30, textAlign: 'center' }}>{qty}</Text>
+                <TouchableOpacity onPress={() => setQty(q => q + 1)} style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: BC, justifyContent: 'center', alignItems: 'center' }}>
+                  <Text style={{ color: '#fff', fontSize: 20, lineHeight: 22 }}>+</Text>
+                </TouchableOpacity>
               </View>
             </View>
           </View>
-        </View>
-        <SectionHeader title={t('Negotiate Price', 'कीमत तय करें')} />
-        <View style={S.chatBox}>
-          <View style={S.chatBubbleOther}><Text style={S.chatBubbleOtherText}>{t('Hello! I have 50kg fresh tomatoes available.', 'नमस्ते! 50 किलो ताजे टमाटर उपलब्ध हैं।')}</Text></View>
-          <View style={S.chatBubbleSelf}><Text style={S.chatBubbleSelfText}>{t('I want 20kg. Can you do ₹35/kg?', 'मुझे 20 किलो चाहिए। ₹35/किलो में?')}</Text></View>
-          <View style={S.chatBubbleOther}><Text style={S.chatBubbleOtherText}>{t('I can do ₹38/kg minimum.', 'न्यूनतम ₹38/किलो।')}</Text></View>
-        </View>
-        <View style={{ flexDirection: 'row', gap: 12 }}>
-          <TouchableOpacity style={S.secondaryBtn}
-            onPress={() => Alert.alert(t('Make Offer', 'प्रस्ताव'), t('Enter your offer price and the farmer will be notified.', 'अपनी कीमत दर्ज करें।'))}>
-            <Text style={[S.secondaryBtnText, { color: COLORS.buyerMid }]}>{t('Make Offer', 'प्रस्ताव दें')}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[S.primaryBtn, { flex: 1, marginTop: 0, backgroundColor: COLORS.buyerMid }]} onPress={() => navigateTo('orderTracking')} activeOpacity={0.88}>
-            <Text style={S.primaryBtnText}>{t('Buy @ ₹38/kg', 'खरीदें @ ₹38')}</Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
-    </View>
-  );
+
+          {/* Negotiation Chat */}
+          <View style={[S.formCard, { marginTop: 12 }]}>
+            <Text style={[S.sectionHeader, { marginBottom: 12 }]}>💬 {t('Negotiate Price', 'कीमत तय करें')}</Text>
+            <View style={S.chatBox}>
+              {localChat.map((msg, i) => (
+                msg.from === 'farmer'
+                  ? <View key={i} style={S.chatBubbleOther}><Text style={S.chatBubbleOtherText}>{msg.text}</Text></View>
+                  : <View key={i} style={S.chatBubbleSelf}><Text style={S.chatBubbleSelfText}>{msg.text}</Text></View>
+              ))}
+              {sending && <View style={S.chatBubbleOther}><Text style={S.chatBubbleOtherText}>...</Text></View>}
+            </View>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+              <TextInput
+                style={[S.searchInput, { flex: 1, borderWidth: 1, borderColor: COLORS.borderLight, borderRadius: 10, paddingHorizontal: 12, backgroundColor: COLORS.surfaceAlt }]}
+                placeholder={t('Your offer price (₹/kg)', 'आपकी कीमत (₹/kg)')}
+                placeholderTextColor={COLORS.textLight}
+                keyboardType="numeric"
+                value={localOffer}
+                onChangeText={setLocalOffer}
+              />
+              <TouchableOpacity style={[S.primaryBtn, { flex: 0, marginTop: 0, paddingHorizontal: 16, backgroundColor: BC, opacity: sending ? 0.6 : 1 }]} onPress={sendOffer} disabled={sending}>
+                <Text style={S.primaryBtnText}>{t('Send', 'भेजें')}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Order buttons */}
+          <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
+            <TouchableOpacity style={[S.secondaryBtn, { flex: 1, opacity: ordering ? 0.6 : 1 }]} onPress={() => handlePlaceOrder(basePrice)} disabled={ordering} activeOpacity={0.88}>
+              <Text style={[S.secondaryBtnText, { color: BC }]}>{t('Buy @ ', 'खरीदें @ ')}₹{basePrice}/kg</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[S.primaryBtn, { flex: 1, marginTop: 0, backgroundColor: BC, opacity: ordering ? 0.6 : 1 }]}
+              disabled={ordering}
+              onPress={() => {
+                // Use last negotiated price if any
+                const lastFarmerMsg = [...localChat].reverse().find(m => m.from === 'farmer' && m.text.includes('₹'));
+                const match = lastFarmerMsg?.text?.match(/₹(\d+)/);
+                const agreedPrice = match ? parseInt(match[1]) : basePrice;
+                handlePlaceOrder(agreedPrice);
+              }} activeOpacity={0.88}>
+              {ordering
+                ? <ActivityIndicator color="#fff" />
+                : <Text style={S.primaryBtnText}>{t('Order Now', 'अभी ऑर्डर करें')}</Text>}
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </View>
+    );
+  };
 
   // ─── SCREEN: ORDER TRACKING ──────────────────────────────────────────────
-  const OrderTracking = () => (
-    <View style={S.screen}>
-      <BackHeader title={t('Order Status', 'ऑर्डर की स्थिति')} onBack={() => navigateTo('buyerMarketplace')} />
-      <ScrollView contentContainerStyle={S.scrollPad} showsVerticalScrollIndicator={false}>
-        <View style={[S.heroCard, { backgroundColor: COLORS.buyerMid }]}>
-          <Text style={S.heroLabel}>Order #40291</Text>
-          <Text style={S.heroAmount}>₹ 760</Text>
-          <Text style={[S.heroTrendText, { marginTop: 4 }]}>{t('20 kg Tomatoes · Ramesh Singh', '20 किलो टमाटर · रमेश सिंह')}</Text>
-        </View>
-        <View style={S.formCard}>
-          <View style={S.trackStep}>
-            <View style={[S.trackDot, { backgroundColor: COLORS.primaryMid }]}><Text style={{ color: '#fff', fontSize: 12 }}>✓</Text></View>
-            <View style={{ flex: 1, marginLeft: 14 }}>
-              <Text style={S.trackTitle}>{t('Order Accepted', 'ऑर्डर स्वीकार')}</Text>
-              <Text style={S.trackTime}>10:00 AM</Text>
+  const OrderTracking = () => {
+    const BC = COLORS.buyerMid;
+    const order = orderPlaced || {
+      farmer: { name: 'Ramesh Singh' },
+      cropName: 'Tomatoes', cropEmoji: '🍅',
+      qty: 20, pricePerKg: 38, total: 760, orderId: '#40291',
+    };
+    return (
+      <View style={S.screen}>
+        <BackHeader title={t('Order Status', 'ऑर्डर की स्थिति')} onBack={() => navigateTo('buyerMarketplace')} />
+        <ScrollView contentContainerStyle={S.scrollPad} showsVerticalScrollIndicator={false}>
+          <View style={[S.heroCard, { backgroundColor: BC }]}>
+            <Text style={S.heroLabel}>{t('Order', 'ऑर्डर')} {order.orderId}</Text>
+            <Text style={S.heroAmount}>₹ {order.total?.toLocaleString()}</Text>
+            <Text style={[S.heroTrendText, { marginTop: 4 }]}>{order.qty} kg {order.cropEmoji} {order.cropName} · {order.farmer?.name}</Text>
+          </View>
+          <View style={S.formCard}>
+            <View style={S.trackStep}>
+              <View style={[S.trackDot, { backgroundColor: COLORS.primaryMid }]}><Text style={{ color: '#fff', fontSize: 12 }}>✓</Text></View>
+              <View style={{ flex: 1, marginLeft: 14 }}>
+                <Text style={S.trackTitle}>{t('Order Accepted', 'ऑर्डर स्वीकार')}</Text>
+                <Text style={S.trackTime}>10:00 AM</Text>
+              </View>
+            </View>
+            <View style={S.trackLine} />
+            <View style={S.trackStep}>
+              <View style={[S.trackDot, { backgroundColor: COLORS.primaryMid }]}><Text style={{ color: '#fff', fontSize: 12 }}>🚚</Text></View>
+              <View style={{ flex: 1, marginLeft: 14 }}>
+                <Text style={S.trackTitle}>{t('Out for Delivery', 'डिलीवरी के लिए निकला')}</Text>
+                <Text style={S.trackTime}>11:30 AM</Text>
+              </View>
+            </View>
+            <View style={[S.trackLine, { backgroundColor: COLORS.borderLight }]} />
+            <View style={S.trackStep}>
+              <View style={[S.trackDot, { backgroundColor: COLORS.borderLight }]}><Text style={{ color: COLORS.textLight, fontSize: 12 }}>📦</Text></View>
+              <View style={{ flex: 1, marginLeft: 14 }}>
+                <Text style={[S.trackTitle, { color: COLORS.textLight }]}>{t('Delivered', 'पहुंचा दिया गया')}</Text>
+                <Text style={S.trackTime}>{t('Est. 12:45 PM', 'अनुमानित 12:45 PM')}</Text>
+              </View>
             </View>
           </View>
-          <View style={S.trackLine} />
-          <View style={S.trackStep}>
-            <View style={[S.trackDot, { backgroundColor: COLORS.primaryMid }]}><Truck color="#fff" size={14} /></View>
-            <View style={{ flex: 1, marginLeft: 14 }}>
-              <Text style={S.trackTitle}>{t('Out for Delivery', 'डिलीवरी के लिए निकला')}</Text>
-              <Text style={S.trackTime}>11:30 AM</Text>
-            </View>
+          <View style={[S.formCard, { marginTop: 12 }]}>
+            <Text style={{ fontWeight: '700', color: COLORS.text, marginBottom: 8 }}>📋 {t('Order Summary', 'ऑर्डर सारांश')}</Text>
+            <Text style={{ color: COLORS.textMid }}>🌾 {order.cropEmoji} {order.cropName} × {order.qty} kg @ ₹{order.pricePerKg}/kg</Text>
+            <Text style={{ color: COLORS.textMid, marginTop: 4 }}>👨🏽‍🌾 {order.farmer?.name}</Text>
+            <Text style={{ color: BC, fontWeight: '800', fontSize: 18, marginTop: 8 }}>{t('Total', 'कुल')}: ₹{order.total?.toLocaleString()}</Text>
           </View>
-          <View style={[S.trackLine, { backgroundColor: COLORS.borderLight }]} />
-          <View style={S.trackStep}>
-            <View style={[S.trackDot, { backgroundColor: COLORS.borderLight }]}><Clock color={COLORS.textLight} size={14} /></View>
-            <View style={{ flex: 1, marginLeft: 14 }}>
-              <Text style={[S.trackTitle, { color: COLORS.textLight }]}>{t('Delivered', 'पहुंचा दिया गया')}</Text>
-              <Text style={S.trackTime}>{t('Est. 12:45 PM', 'अनुमानित 12:45 PM')}</Text>
-            </View>
-          </View>
-        </View>
-        <TouchableOpacity style={[S.primaryBtn, { backgroundColor: COLORS.buyerMid }]} onPress={() => navigateTo('buyerMarketplace')} activeOpacity={0.88}>
-          <Text style={S.primaryBtnText}>{t('Back to Market', 'बाज़ार वापस जाएँ')}</Text>
-        </TouchableOpacity>
-      </ScrollView>
-    </View>
-  );
+          <TouchableOpacity style={[S.primaryBtn, { backgroundColor: BC }]} onPress={() => { setOrderPlaced(null); navigateTo('buyerMarketplace'); }} activeOpacity={0.88}>
+            <Text style={S.primaryBtnText}>{t('Back to Market', 'बाज़ार वापस जाएँ')}</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+    );
+  };
 
-  // ─── SCREEN: PROFILE ─────────────────────────────────────────────────────
   const ProfileScreen = () => {
     const isFarmer = role === 'farmer';
     const isRetailer = role === 'retailer';
@@ -1464,6 +1725,35 @@ export default function App() {
     const displayPhone = currentUser?.phone ? `+91 ${currentUser.phone}` : '—';
     const accent = isFarmer ? COLORS.primaryMid : isRetailer ? COLORS.retailerMid : COLORS.buyerMid;
     const accentBg = isFarmer ? COLORS.primaryBg : isRetailer ? COLORS.retailerBg : COLORS.buyerBg;
+
+    const [locationText, setLocationText] = useState(t('Fetching...', 'ढूंढ रहा है...'));
+
+    useEffect(() => {
+      (async () => {
+        try {
+          let { status } = await Location.requestForegroundPermissionsAsync();
+          if (status !== 'granted') {
+            setLocationText(t('Permission Denied', 'अनुमति नहीं दी गई'));
+            return;
+          }
+          let location = await Location.getCurrentPositionAsync({});
+          let geocode = await Location.reverseGeocodeAsync({
+            latitude: location.coords.latitude,
+            longitude: location.coords.longitude
+          });
+          if (geocode && geocode.length > 0) {
+            let city = geocode[0].city || geocode[0].district || geocode[0].subregion || '';
+            let state = geocode[0].region || '';
+            setLocationText(`${city}${city && state ? ', ' : ''}${state}`);
+          } else {
+            setLocationText(t('Location Not Found', 'स्थान नहीं मिला'));
+          }
+        } catch (error) {
+          console.warn("Profile location error:", error);
+          setLocationText(t('Error fetching', 'त्रुटि'));
+        }
+      })();
+    }, []);
 
     return (
       <View style={S.screen}>
@@ -1489,7 +1779,7 @@ export default function App() {
               [t('Mobile', 'मोबाइल'), displayPhone],
               [t('Role', 'भूमिका'), isFarmer ? '🚜 Farmer' : isRetailer ? '🏬 Retailer' : '🛒 Buyer'],
               [t('Member Since', 'सदस्य बने'), currentUser?.createdAt ? new Date(currentUser.createdAt?.toDate?.() || currentUser.createdAt).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : t('Recently', 'हाल ही में')],
-              [t('Location', 'स्थान'), 'Indore, MP'],
+              [t('Location', 'स्थान'), locationText],
             ].map(([label, val], i, arr) => (
               <View key={i} style={[S.detailRow, { borderBottomWidth: i < arr.length - 1 ? 1 : 0 }]}>
                 <Text style={S.detailRowLabel}>{label}</Text>
