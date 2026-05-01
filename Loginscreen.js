@@ -9,10 +9,34 @@ import {
     StatusBar,
     Alert,
     ActivityIndicator,
+    Modal,
+    FlatList,
 } from 'react-native';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
 import { auth, db } from './firebaseConfig';
+
+// ─────────────────────────────────────────────
+//  TRANSLATIONS
+// ─────────────────────────────────────────────
+const TRANSLATIONS = {
+    tagline: { en: 'Farm to Fork, Directly.', hi: 'खेत से आपकी थाली तक, सीधे।', mr: 'शेतापासून थेट तुमच्या ताटापर्यंत.', ta: 'பண்ணையிலிருந்து முட்கரண்டிக்கு, நேரடியாக.', te: 'పొలం నుండి ఫోర్క్ వరకు, నేరుగా.', bn: 'খামার থেকে সরাসরি আপনার প্লেটে।' },
+    who: { en: 'Who are you?', hi: 'आप कौन हैं?', mr: 'तुम्ही कोण आहात?', ta: 'நீங்கள் யார்?', te: 'మీరు ఎవరు?', bn: 'আপনি কে?' },
+    selectRoleDesc: { en: 'Select your role to get a personalised experience.', hi: 'अपनी भूमिका चुनें।', mr: 'तुमची भूमिका निवडा.', ta: 'உங்கள் பங்கைத் தேர்ந்தெடுக்கவும்.', te: 'మీ పాత్రను ఎంచుకోండి.', bn: 'আপনার ভূমিকা নির্বাচন করুন।' },
+    continue: { en: 'Continue', hi: 'आगे बढ़ें', mr: 'पुढे जा', ta: 'தொடரவும்', te: 'కొనసాగించు', bn: 'চালিয়ে যান' },
+    changeRole: { en: 'Change Role', hi: 'भूमिका बदलें', mr: 'भूमिका बदला', ta: 'பங்கை மாற்று', te: 'పాత్రను మార్చండి', bn: 'ভূমিকা পরিবর্তন করুন' },
+    createAccount: { en: 'Create Account', hi: 'खाता बनाएं', mr: 'खाते तयार करा', ta: 'கணக்கை உருவாக்கு', te: 'ఖాతాను సృష్టించండి', bn: 'অ্যাকাউন্ট তৈরি করুন' },
+    welcomeBack: { en: 'Welcome Back!', hi: 'वापसी पर स्वागत!', mr: 'पुन्हा स्वागत आहे!', ta: 'மீண்டும் நல்வரவு!', te: 'తిరిగి స్వాగతం!', bn: 'আবার স্বাগতম!' },
+    fullName: { en: 'Full Name', hi: 'पूरा नाम', mr: 'पूर्ण नाव', ta: 'முழு பெயர்', te: 'పూర్తి పేరు', bn: 'পুরো নাম' },
+    mobile: { en: 'Mobile Number', hi: 'मोबाइल नंबर', mr: 'मोबाईल क्रमांक', ta: 'மொபைல் எண்', te: 'మొబైల్ నంబర్', bn: 'মোবাইল নম্বর' },
+    password: { en: 'Password', hi: 'पासवर्ड', mr: 'पासवर्ड', ta: 'கடவுச்சொல்', te: 'పాస్‌వర్డ్', bn: 'পাসওয়ার্ড' },
+    minChars: { en: 'Minimum 6 characters', hi: 'न्यूनतम 6 अक्षर', mr: 'किमान ६ अक्षरे', ta: 'குறைந்தபட்சம் 6 எழுத்துக்கள்', te: 'కనీసం 6 అక్షరాలు', bn: 'অন্তত ৬টি অক্ষর' },
+    forgotPass: { en: 'Forgot password?', hi: 'पासवर्ड भूल गए?', mr: 'पासवर्ड विसरलात?', ta: 'கடவுச்சொல் மறந்துவிட்டதா?', te: 'పాస్‌వర్డ్ మర్చిపోయారా?', bn: 'পাসওয়ার্ড ভুলে গেছেন?' },
+    signIn: { en: 'Sign In', hi: 'साइन इन', mr: 'साइन इन करा', ta: 'உள்நுழை', te: 'సైన్ ఇన్', bn: 'সাইন ইন' },
+    signUp: { en: 'Sign Up', hi: 'साइन अप', mr: 'साइन अप करा', ta: 'பதிவு செய்', te: 'సైన్ అప్', bn: 'সাইন আপ' },
+    or: { en: 'or', hi: 'या', mr: 'किंवा', ta: 'அல்லது', te: 'లేదా', bn: 'বা' },
+    loginOtp: { en: 'Login with OTP', hi: 'OTP से लॉगिन करें', mr: 'OTP सह लॉगिन करा', ta: 'OTP மூலம் உள்நுழைக', te: 'OTP తో లాగిన్ అవ్వండి', bn: 'OTP দিয়ে লগইন করুন' },
+};
 
 // ─────────────────────────────────────────────
 //  COLORS (matches your existing app theme)
@@ -148,7 +172,7 @@ const PrivilegePreview = ({ roleKey, language }) => {
 // ─────────────────────────────────────────────
 //  MAIN LOGIN SCREEN
 // ─────────────────────────────────────────────
-export default function LoginScreen({ onLogin, language = 'en' }) {
+export default function LoginScreen({ onLogin, language = 'en', onLanguageChange, t: externalT }) {
     const [step, setStep] = useState('role'); // 'role' | 'credentials'
     const [selectedRole, setSelectedRole] = useState(null);
     const [phone, setPhone] = useState('');
@@ -157,8 +181,27 @@ export default function LoginScreen({ onLogin, language = 'en' }) {
     const [loading, setLoading] = useState(false);
     const [isSignUp, setIsSignUp] = useState(false);
     const [name, setName] = useState('');
+    const [langModalVisible, setLangModalVisible] = useState(false);
 
-    const t = (en, hi) => (language === 'hi' ? hi : en);
+    const LANGUAGES = [
+        { code: 'en', label: 'English', native: 'English' },
+        { code: 'hi', label: 'Hindi', native: 'हिन्दी' },
+        { code: 'mr', label: 'Marathi', native: 'मराठी' },
+        { code: 'ta', label: 'Tamil', native: 'தமிழ்' },
+        { code: 'te', label: 'Telugu', native: 'తెలుగు' },
+        { code: 'bn', label: 'Bengali', native: 'বাংলা' },
+    ];
+
+    const localT = (en, hi) => {
+        const transKey = Object.keys(TRANSLATIONS).find(k => TRANSLATIONS[k].en === en);
+        if (transKey && TRANSLATIONS[transKey][language]) {
+            return TRANSLATIONS[transKey][language];
+        }
+        return language === 'en' ? en : (hi || en);
+    };
+
+    const t = externalT || localT;
+
     const config = selectedRole ? ROLE_CONFIG[selectedRole] : null;
     const roleColor = config ? config.color : COLORS.primary;
 
@@ -193,12 +236,13 @@ export default function LoginScreen({ onLogin, language = 'en' }) {
           if (isSignUp) {
             const cred = await createUserWithEmailAndPassword(auth, email, password);
             await setDoc(doc(db, 'users', cred.user.uid), {
-              name, phone, role: selectedRole, createdAt: new Date(),
+              name, phone, role: selectedRole, createdAt: new Date(), language,
             });
           } else {
-            await signInWithEmailAndPassword(auth, email, password);
+            const cred = await signInWithEmailAndPassword(auth, email, password);
+            await setDoc(doc(db, 'users', cred.user.uid), { language }, { merge: true });
           }
-          onLogin(selectedRole, { name, phone });
+          onLogin(selectedRole, { name, phone, language });
         } catch (err) {
           Alert.alert('Error', err.message);
         } finally { setLoading(false); }
@@ -211,6 +255,12 @@ export default function LoginScreen({ onLogin, language = 'en' }) {
         return (
             <ScrollView style={styles.screen} contentContainerStyle={styles.scrollPad} keyboardShouldPersistTaps="handled">
                 <StatusBar barStyle="dark-content" backgroundColor={COLORS.background} />
+
+                {/* Language Selector Icon */}
+                <TouchableOpacity style={styles.langBtn} onPress={() => setLangModalVisible(true)}>
+                    <Text style={styles.langBtnIcon}>🌐</Text>
+                    <Text style={styles.langBtnText}>{LANGUAGES.find(l => l.code === language)?.native || 'English'}</Text>
+                </TouchableOpacity>
 
                 <View style={styles.logoWrap}>
                     <Text style={styles.logo}>KisanDirect</Text>
@@ -233,6 +283,36 @@ export default function LoginScreen({ onLogin, language = 'en' }) {
                 >
                     <Text style={styles.primaryBtnText}>{t('Continue', 'आगे बढ़ें')} →</Text>
                 </TouchableOpacity>
+
+                {/* Language Modal */}
+                <Modal visible={langModalVisible} transparent={true} animationType="fade" onRequestClose={() => setLangModalVisible(false)}>
+                    <View style={styles.modalOverlay}>
+                        <View style={styles.modalContent}>
+                            <Text style={styles.modalTitle}>Select Language</Text>
+                            <FlatList
+                                data={LANGUAGES}
+                                keyExtractor={(item) => item.code}
+                                renderItem={({ item }) => (
+                                    <TouchableOpacity
+                                        style={[styles.langOption, language === item.code && styles.langOptionSelected]}
+                                        onPress={() => {
+                                            if (onLanguageChange) onLanguageChange(item.code);
+                                            setLangModalVisible(false);
+                                        }}
+                                    >
+                                        <Text style={[styles.langOptionText, language === item.code && styles.langOptionTextSelected]}>
+                                            {item.native} ({item.label})
+                                        </Text>
+                                        {language === item.code && <Text style={styles.langOptionCheck}>✓</Text>}
+                                    </TouchableOpacity>
+                                )}
+                            />
+                            <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setLangModalVisible(false)}>
+                                <Text style={styles.modalCloseText}>Close</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </Modal>
             </ScrollView>
         );
     }
@@ -243,6 +323,12 @@ export default function LoginScreen({ onLogin, language = 'en' }) {
     return (
         <ScrollView style={styles.screen} contentContainerStyle={styles.scrollPad} keyboardShouldPersistTaps="handled">
             <StatusBar barStyle="dark-content" backgroundColor={COLORS.background} />
+
+            {/* Language Selector Icon */}
+            <TouchableOpacity style={styles.langBtn} onPress={() => setLangModalVisible(true)}>
+                <Text style={styles.langBtnIcon}>🌐</Text>
+                <Text style={styles.langBtnText}>{LANGUAGES.find(l => l.code === language)?.native || 'English'}</Text>
+            </TouchableOpacity>
 
             <TouchableOpacity style={styles.backRow} onPress={() => setStep('role')}>
                 <Text style={[styles.backArrow, { color: roleColor }]}>← </Text>
@@ -352,6 +438,36 @@ export default function LoginScreen({ onLogin, language = 'en' }) {
                     📱 {t('Login with OTP', 'OTP से लॉगिन करें')}
                 </Text>
             </TouchableOpacity>
+
+            {/* Language Modal */}
+            <Modal visible={langModalVisible} transparent={true} animationType="fade" onRequestClose={() => setLangModalVisible(false)}>
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <Text style={styles.modalTitle}>Select Language</Text>
+                        <FlatList
+                            data={LANGUAGES}
+                            keyExtractor={(item) => item.code}
+                            renderItem={({ item }) => (
+                                <TouchableOpacity
+                                    style={[styles.langOption, language === item.code && styles.langOptionSelected]}
+                                    onPress={() => {
+                                        if (onLanguageChange) onLanguageChange(item.code);
+                                        setLangModalVisible(false);
+                                    }}
+                                >
+                                    <Text style={[styles.langOptionText, language === item.code && styles.langOptionTextSelected]}>
+                                        {item.native} ({item.label})
+                                    </Text>
+                                    {language === item.code && <Text style={styles.langOptionCheck}>✓</Text>}
+                                </TouchableOpacity>
+                            )}
+                        />
+                        <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setLangModalVisible(false)}>
+                            <Text style={styles.modalCloseText}>Close</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
         </ScrollView>
     );
 }
@@ -438,4 +554,19 @@ const styles = StyleSheet.create({
     dividerText: { marginHorizontal: 12, fontSize: 13, color: COLORS.textLight },
     otpBtn: { borderWidth: 2, borderRadius: 16, padding: 16, alignItems: 'center' },
     otpBtnText: { fontSize: 16, fontWeight: '800' },
+
+    langBtn: { position: 'absolute', top: 40, right: 24, flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20, borderWidth: 1, borderColor: COLORS.border, zIndex: 10 },
+    langBtnIcon: { fontSize: 16, marginRight: 6 },
+    langBtnText: { fontSize: 12, fontWeight: '700', color: COLORS.text },
+
+    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+    modalContent: { width: '80%', backgroundColor: '#fff', borderRadius: 20, padding: 20, maxHeight: '80%' },
+    modalTitle: { fontSize: 18, fontWeight: '800', color: COLORS.text, marginBottom: 16, textAlign: 'center' },
+    langOption: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+    langOptionSelected: { backgroundColor: COLORS.primaryBg, borderRadius: 10, paddingHorizontal: 10, borderBottomWidth: 0 },
+    langOptionText: { fontSize: 16, color: COLORS.text, fontWeight: '500' },
+    langOptionTextSelected: { color: COLORS.primary, fontWeight: '800' },
+    langOptionCheck: { fontSize: 18, color: COLORS.primary, fontWeight: '800' },
+    modalCloseBtn: { marginTop: 20, paddingVertical: 14, borderRadius: 12, backgroundColor: COLORS.primaryBg, alignItems: 'center' },
+    modalCloseText: { fontSize: 16, fontWeight: '700', color: COLORS.primary },
 });

@@ -91,6 +91,84 @@ const NEARBY_FARMERS = [
   { id: 5, name: 'Meena Devi', village: 'Mhow', dist: '5.8 km', rating: 4.7, reviews: 201, crops: ['🍚 Rice', '🧅 Onions'], verified: true, avatar: 'MD', deliveries: 345, price: '₹28–36/kg', badge: 'Organic' },
 ];
 
+// ─── GLOBAL TRANSLATIONS (Fast cache for common terms) ────────────────────
+const GLOBAL_TRANSLATIONS = {
+  'Dashboard': { en: 'Dashboard', hi: 'डैशबोर्ड', mr: 'डॅशबोर्ड', ta: 'டாஷ்போர்டு', te: 'డాష్బోర్డు', bn: 'ড্যাশবোর্ড' },
+  'Tools': { en: 'Tools', hi: 'औज़ार', mr: 'साधने', ta: 'கருவிகள்', te: 'సాధనాలు', bn: 'সরঞ্জাম' },
+  "Today's Earnings": { en: "Today's Earnings", hi: "आज की कमाई", mr: "आजची कमाई", ta: "இன்றைய வருமானம்", te: "నేటి ఆదాయం", bn: "আজকের আয়" },
+  'Products': { en: 'Products', hi: 'उत्पाद', mr: 'उत्पादने', ta: 'தயாரிப்புகள்', te: 'ఉత్పత్తులు', bn: 'পণ্য' },
+  'Orders': { en: 'Orders', hi: 'ऑर्डर', mr: 'ऑर्डर्स', ta: 'ஆர்டர்கள்', te: 'ఆర్డర్లు', bn: 'অর্ডার' },
+  'Rating': { en: 'Rating', hi: 'रेटिंग', mr: 'रेटिंग', ta: 'மதிப்பீடு', te: 'రేటింగ్', bn: 'রেটিং' },
+  'Overview': { en: 'Overview', hi: 'अवलोकन', mr: 'आढावा', ta: 'கண்ணோட்டம்', te: 'అవలోకనం', bn: 'সংক্ষিপ্ত বিবরণ' },
+  'Market': { en: 'Market', hi: 'बाज़ार', mr: 'बाजार', ta: 'சந்தை', te: 'మార్కెట్', bn: 'বাজার' },
+  'Analytics': { en: 'Analytics', hi: 'विश्लेषण', mr: 'विश्लेषण', ta: 'பகுப்பாய்வு', te: 'விశ్లేషణ', bn: 'বিশ্লেষণ' },
+  'Farmers': { en: 'Farmers', hi: 'किसान', mr: 'शेतकरी', ta: 'விவசாயிகள்', te: 'రైతులు', bn: 'কৃষক' },
+  'Price': { en: 'Price', hi: 'मूल्य', mr: 'किंमत', ta: 'விலை', te: 'ధర', bn: 'মূল্য' },
+  'Available': { en: 'Available', hi: 'उपलब्ध', mr: 'उपलब्ध', ta: 'கிடைக்கிறது', te: 'అందుబాటులో', bn: 'পাওয়া যায়' },
+  'Distance': { en: 'Distance', hi: 'दूरी', mr: 'अंतर', ta: 'தூரம்', te: 'దూరం', bn: 'দূরত্ব' },
+  'Contact Now': { en: 'Contact Now', hi: 'अभी संपर्क करें', mr: 'आता संपर्क करा', ta: 'இப்போது தொடர்பு கொள்ளவும்', te: 'ఇప్పుడు సంప్రదించండి', bn: 'এখনই যোগাযোগ করুন' },
+  'Close': { en: 'Close', hi: 'बंद करें', mr: 'बंद करा', ta: 'மூடு', te: 'మూసివేయి', bn: 'বন্ধ করুন' },
+  'Buy Now': { en: 'Buy Now', hi: 'खरीदें', mr: 'आता खरेदी करा', ta: 'இப்போது வாங்கவும்', te: 'ఇప్పుడే కొనండి', bn: 'এখনই কিনুন' },
+};
+
+// ─── DYNAMIC TRANSLATOR HOOK ─────────────────────────────────────────────
+const translationCache = {};
+const listeners = new Set();
+const notifyListeners = () => listeners.forEach(l => l());
+
+const useTranslation = (language) => {
+  const [, forceUpdate] = useState({});
+
+  useEffect(() => {
+    listeners.add(forceUpdate);
+    return () => listeners.delete(forceUpdate);
+  }, []);
+
+  const t = useCallback((enText, hiText) => {
+    if (!enText) return '';
+    if (language === 'en') return enText;
+    
+    // Quick fallback check inside our predefined hardcoded global translations
+    const globalKey = Object.keys(GLOBAL_TRANSLATIONS).find(k => GLOBAL_TRANSLATIONS[k].en === enText || k === enText);
+    if (globalKey && GLOBAL_TRANSLATIONS[globalKey][language]) {
+      return GLOBAL_TRANSLATIONS[globalKey][language];
+    }
+    
+    // Special fallback for Hindi if hardcoded in component
+    if (language === 'hi' && hiText) return hiText;
+
+    const cacheKey = `${language}_${enText}`;
+    
+    // If we have it in cache, return it immediately
+    if (translationCache[cacheKey]) {
+      return translationCache[cacheKey];
+    }
+
+    // If it's not in cache and not currently fetching, fetch it via free translate API
+    if (translationCache[cacheKey] === undefined) {
+      // Set an optimistic fallback (Hindi if available, else English) to avoid infinite re-renders
+      translationCache[cacheKey] = hiText || enText;
+      
+      fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=${language}&dt=t&q=${encodeURIComponent(enText)}`)
+        .then(res => res.json())
+        .then(json => {
+          if (json && json[0]) {
+            const translated = json[0].map(item => item[0]).join('');
+            translationCache[cacheKey] = translated;
+            notifyListeners(); // trigger re-render in all components using this hook
+          }
+        })
+        .catch(err => {
+          console.warn("Translation failed for", enText, err);
+        });
+    }
+
+    return translationCache[cacheKey]; // returns the optimistic fallback until fetched
+  }, [language]);
+
+  return t;
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState('onboarding');
@@ -132,7 +210,7 @@ export default function App() {
     { emoji: '🌾', name: 'Wheat', nameHi: 'गेहूं', price: '₹ 22/kg', qty: '200 kg', trend: '=' },
   ]);
 
-  const t = (enText, hiText) => language === 'en' ? enText : hiText;
+  const t = useTranslation(language);
   const navigateTo = (screen) => setCurrentScreen(screen);
 
   // ── FIX: Role-aware auto-login — reads role from Firestore only ──────
@@ -335,7 +413,7 @@ export default function App() {
             </View>
             <View style={S.auctionLivePill}>
               <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: '#69F0AE', marginRight: 5 }} />
-              <Text style={S.auctionLiveTxt}>LIVE</Text>
+              <Text style={S.auctionLiveTxt}>{t('LIVE', 'लाइव')}</Text>
             </View>
           </TouchableOpacity>
 
@@ -367,7 +445,7 @@ export default function App() {
               onPress={() => Alert.alert(p.name, `${t('Price', 'मूल्य')}: ${p.price}\n${t('Available', 'उपलब्ध')}: ${p.qty}`)}>
               <View style={S.listingEmoji}><Text style={{ fontSize: 28 }}>{p.emoji}</Text></View>
               <View style={{ flex: 1 }}>
-                <Text style={S.listingName}>{language === 'en' ? p.name : p.nameHi}</Text>
+                <Text style={S.listingName}>{t(p.name, p.nameHi)}</Text>
                 <Text style={S.listingQty}>{p.qty} {t('available', 'उपलब्ध')}</Text>
               </View>
               <View style={{ alignItems: 'flex-end' }}>
@@ -422,7 +500,7 @@ export default function App() {
               <Text style={S.toolDesc}>{t('Let buyers bid — get best market price', 'खरीदारों को बोली लगाने दें — सबसे अच्छा भाव पाएं')}</Text>
             </View>
             <View style={{ backgroundColor: COLORS.primaryMid, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 }}>
-              <Text style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>NEW</Text>
+              <Text style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>{t('NEW', 'नया')}</Text>
             </View>
           </TouchableOpacity>
         </ScrollView>
@@ -492,16 +570,16 @@ export default function App() {
               <SectionHeader title={t('Recent Orders', 'हालिया ऑर्डर')} />
               {bulkOrders.map((order) => (
                 <TouchableOpacity key={order.id} style={[S.orderCard, { borderLeftColor: order.statusColor }]}
-                  onPress={() => Alert.alert(order.id, `${order.crop} ${order.qty}\n${order.farmer}\n${order.price}`)}>
+                  onPress={() => Alert.alert(order.id, `${t(order.crop)} ${order.qty}\n${t(order.farmer)}\n${order.price}`)}>
                   <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                     <Text style={{ fontSize: 30, marginRight: 12 }}>{order.emoji}</Text>
                     <View style={{ flex: 1 }}>
-                      <Text style={S.orderCrop}>{order.crop} — {order.qty}</Text>
-                      <Text style={S.orderMeta}>{order.farmer} • {order.price}</Text>
+                      <Text style={S.orderCrop}>{t(order.crop)} — {order.qty}</Text>
+                      <Text style={S.orderMeta}>{t(order.farmer)} • {order.price}</Text>
                       <Text style={S.orderId}>{order.id}</Text>
                     </View>
                     <View style={[S.statusPill, { backgroundColor: order.statusColor + '1A' }]}>
-                      <Text style={[S.statusPillText, { color: order.statusColor }]}>{order.status}</Text>
+                      <Text style={[S.statusPillText, { color: order.statusColor }]}>{t(order.status)}</Text>
                     </View>
                   </View>
                 </TouchableOpacity>
@@ -520,16 +598,16 @@ export default function App() {
                 { id: 'BO-1019', crop: 'Potatoes', emoji: '🥔', qty: '1000 kg', farmer: 'Village Co-op', status: 'Delivered', statusColor: RC, price: '₹22/kg', total: '₹22,000', date: '2 days ago' },
               ].map((order) => (
                 <TouchableOpacity key={order.id} style={[S.orderCard, { borderLeftColor: order.statusColor }]}
-                  onPress={() => Alert.alert(order.id, `${order.crop} ${order.qty}\n${order.farmer}\n${order.price} • ${order.total}`)}>
+                  onPress={() => Alert.alert(order.id, `${t(order.crop)} ${order.qty}\n${t(order.farmer)}\n${order.price} • ${order.total}`)}>
                   <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                     <Text style={{ fontSize: 30, marginRight: 12 }}>{order.emoji}</Text>
                     <View style={{ flex: 1 }}>
-                      <Text style={S.orderCrop}>{order.crop} — {order.qty}</Text>
-                      <Text style={S.orderMeta}>{order.farmer} • {order.date}</Text>
+                      <Text style={S.orderCrop}>{t(order.crop)} — {order.qty}</Text>
+                      <Text style={S.orderMeta}>{t(order.farmer)} • {t(order.date)}</Text>
                       <Text style={[S.orderMeta, { color: RC, fontWeight: '700' }]}>{order.price} • {order.total}</Text>
                     </View>
                     <View style={[S.statusPill, { backgroundColor: order.statusColor + '1A' }]}>
-                      <Text style={[S.statusPillText, { color: order.statusColor }]}>{order.status}</Text>
+                      <Text style={[S.statusPillText, { color: order.statusColor }]}>{t(order.status)}</Text>
                     </View>
                   </View>
                 </TouchableOpacity>
@@ -548,11 +626,11 @@ export default function App() {
               </View>
               {availableCrops.map((crop, i) => (
                 <TouchableOpacity key={i} style={S.marketRow}
-                  onPress={() => Alert.alert(crop.name, `${t('Price', 'मूल्य')}: ${crop.price}\n${t('Available', 'उपलब्ध')}: ${crop.available}\n${t('Farmer', 'किसान')}: ${crop.farmer}`)}>
+                  onPress={() => Alert.alert(t(crop.name), `${t('Price', 'मूल्य')}: ${crop.price}\n${t('Available', 'उपलब्ध')}: ${crop.available}\n${t('Farmer', 'किसान')}: ${t(crop.farmer)}`)}>
                   <Text style={{ fontSize: 34, marginRight: 14 }}>{crop.emoji}</Text>
                   <View style={{ flex: 1 }}>
-                    <Text style={S.marketCropName}>{crop.name}</Text>
-                    <Text style={S.marketCropMeta}>{crop.farmer} • {crop.dist}</Text>
+                    <Text style={S.marketCropName}>{t(crop.name)}</Text>
+                    <Text style={S.marketCropMeta}>{t(crop.farmer)} • {crop.dist}</Text>
                     <Text style={[S.marketCropAvail, { color: RC }]}>{crop.available} {t('available', 'उपलब्ध')}</Text>
                   </View>
                   <View style={{ alignItems: 'flex-end' }}>
@@ -584,7 +662,7 @@ export default function App() {
                   <Text style={{ fontSize: 26, marginRight: 12 }}>{crop.emoji}</Text>
                   <View style={{ flex: 1 }}>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                      <Text style={S.analyticsCropName}>{crop.name} <Text style={S.analyticsCropQty}>{crop.qty}</Text></Text>
+                      <Text style={S.analyticsCropName}>{t(crop.name)} <Text style={S.analyticsCropQty}>{crop.qty}</Text></Text>
                       <Text style={[S.analyticsCropSpend, { color: RC }]}>{crop.spend}</Text>
                     </View>
                     <View style={S.progressBg}>
@@ -716,7 +794,7 @@ export default function App() {
                   </View>
                   <View style={{ flex: 1, marginLeft: 14 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                      <Text style={S.farmerName}>{farmer.name}</Text>
+                      <Text style={S.farmerName}>{t(farmer.name)}</Text>
                       {farmer.verified && (
                         <View style={S.verifiedBadge}>
                           <Text style={S.verifiedBadgeText}>✓ {t('Verified', 'सत्यापित')}</Text>
@@ -1436,6 +1514,9 @@ export default function App() {
 
       {currentScreen === 'onboarding' && (
         <LoginScreen
+          language={language}
+          onLanguageChange={setLanguage}
+          t={t}
           onLogin={(selectedRole, user) => {
             // ── ROLE GUARD: Always use role from Firestore (user object), not the UI selection ──
             const trustedRole = user?.role || selectedRole;
