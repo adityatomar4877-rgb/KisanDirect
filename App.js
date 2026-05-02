@@ -15,11 +15,11 @@ import Constants from 'expo-constants';
 import {
   auth, db, saveUserProfile, getUserProfile, updateUserProfile,
   addListing, getFarmerListings, getAllListings, updateListing, deleteListing,
+  listenAllListings, listenFarmerListings, listenFarmerOrders,
   placeOrder as fbPlaceOrder, getBuyerOrders, getFarmerOrders, updateOrderStatus,
   sendNegotiationMessage, listenNegotiationMessages,
 } from './firebaseConfig';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
 import LoginScreen, { ROLE_CONFIG } from './Loginscreen.js';
 import NearbyMandi from './NearbyMandi';
 import AuctionScreen from './AuctionScreen';
@@ -107,7 +107,7 @@ const GLOBAL_TRANSLATIONS = {
   'Rating': { en: 'Rating', hi: 'रेटिंग', mr: 'रेटिंग', ta: 'மதிப்பீடு', te: 'రేటింగ్', bn: 'রেটিং' },
   'Overview': { en: 'Overview', hi: 'अवलोकन', mr: 'आढावा', ta: 'கண்ணோட்டம்', te: 'అవలోకనం', bn: 'সংক্ষিপ্ত বিবরণ' },
   'Market': { en: 'Market', hi: 'बाज़ार', mr: 'बाजार', ta: 'சந்தை', te: 'మార్కెట్', bn: 'বাজার' },
-  'Analytics': { en: 'Analytics', hi: 'विश्लेषण', mr: 'विश्लेषण', ta: 'பகுப்பாய்வு', te: 'விశ్లేషణ', bn: 'বিশ্লেষণ' },
+  'Analytics': { en: 'Analytics', hi: 'विश्लेषण', mr: 'विश्लेषण', ta: 'பகுப்பாய்வு', te: 'విశ్లేషణ', bn: 'বিশ্লেষণ' },
   'Farmers': { en: 'Farmers', hi: 'किसान', mr: 'शेतकरी', ta: 'விவசாயிகள்', te: 'రైతులు', bn: 'কৃষক' },
   'Price': { en: 'Price', hi: 'मूल्य', mr: 'किंमत', ta: 'விலை', te: 'ధర', bn: 'মূল্য' },
   'Available': { en: 'Available', hi: 'उपलब्ध', mr: 'उपलब्ध', ta: 'கிடைக்கிறது', te: 'అందుబాటులో', bn: 'পাওয়া যায়' },
@@ -134,25 +134,20 @@ const useTranslation = (language) => {
     if (!enText) return '';
     if (language === 'en') return enText;
 
-    // Quick fallback check inside our predefined hardcoded global translations
     const globalKey = Object.keys(GLOBAL_TRANSLATIONS).find(k => GLOBAL_TRANSLATIONS[k].en === enText || k === enText);
     if (globalKey && GLOBAL_TRANSLATIONS[globalKey][language]) {
       return GLOBAL_TRANSLATIONS[globalKey][language];
     }
 
-    // Special fallback for Hindi if hardcoded in component
     if (language === 'hi' && hiText) return hiText;
 
     const cacheKey = `${language}_${enText}`;
 
-    // If we have it in cache, return it immediately
     if (translationCache[cacheKey]) {
       return translationCache[cacheKey];
     }
 
-    // If it's not in cache and not currently fetching, fetch it via free translate API
     if (translationCache[cacheKey] === undefined) {
-      // Set an optimistic fallback (Hindi if available, else English) to avoid infinite re-renders
       translationCache[cacheKey] = hiText || enText;
 
       fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=${language}&dt=t&q=${encodeURIComponent(enText)}`)
@@ -161,7 +156,7 @@ const useTranslation = (language) => {
           if (json && json[0]) {
             const translated = json[0].map(item => item[0]).join('');
             translationCache[cacheKey] = translated;
-            notifyListeners(); // trigger re-render in all components using this hook
+            notifyListeners();
           }
         })
         .catch(err => {
@@ -169,7 +164,7 @@ const useTranslation = (language) => {
         });
     }
 
-    return translationCache[cacheKey]; // returns the optimistic fallback until fetched
+    return translationCache[cacheKey];
   }, [language]);
 
   return t;
@@ -214,7 +209,6 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState([]);
   const [orderPlaced, setOrderPlaced] = useState(null);
 
-  // ── Listings state — synced with Firestore ───────────────────────────
   const [myListings, setMyListings] = useState([]);
   const [marketListings, setMarketListings] = useState([]);
   const [myOrders, setMyOrders] = useState([]);
@@ -223,10 +217,13 @@ export default function App() {
   const t = useTranslation(language);
   const navigateTo = (screen) => setCurrentScreen(screen);
 
-  // ── FIX: Role-aware auto-login — reads role from Firestore only ──────
+  const hasAutoLoggedRef = React.useRef(false);
+
+  // ── Role-aware auto-login ────────────────────────────────────────────────
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser && !currentUser) {
+      if (firebaseUser && !hasAutoLoggedRef.current) {
+        hasAutoLoggedRef.current = true;
         try {
           const profile = await getUserProfile(firebaseUser.uid);
           if (profile) {
@@ -234,7 +231,6 @@ export default function App() {
             setLanguage(profile.language || 'en');
             setRole(profile.role);
             navigateTo(ROLE_CONFIG[profile.role].screen);
-            // Load data based on role
             loadUserData(firebaseUser.uid, profile.role);
           }
         } catch (e) { console.warn('Auth load error:', e); }
@@ -243,12 +239,21 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Load listings and orders from Firestore after login
-  const loadUserData = async (uid, userRole) => {
+  const unsubscribeRefs = React.useRef([]);
+
+  const stopListeners = () => {
+    unsubscribeRefs.current.forEach(fn => { try { fn(); } catch (_) { } });
+    unsubscribeRefs.current = [];
+  };
+
+  // ── loadUserData — no manual token refresh or delay needed.
+  //    waitForAuth() inside each listener in firebaseConfig.js handles that.
+  const loadUserData = (uid, userRole) => {
     setListingsLoading(true);
-    try {
-      if (userRole === 'farmer') {
-        const listings = await getFarmerListings(uid);
+    stopListeners();
+
+    if (userRole === 'farmer') {
+      const unsubListings = listenFarmerListings(uid, (listings) => {
         setMyListings(listings.map(l => ({
           id: l.id,
           emoji: l.emoji || '🌿',
@@ -259,17 +264,32 @@ export default function App() {
           trend: '=',
           farmerUid: l.farmerUid,
         })));
-        const orders = await getFarmerOrders(uid);
-        setMyOrders(orders);
-      } else {
-        // buyer / retailer — load marketplace listings
-        const listings = await getAllListings();
+        setListingsLoading(false);
+      });
+      unsubscribeRefs.current.push(unsubListings);
+
+      const unsubAll = listenAllListings((listings) => {
         setMarketListings(listings);
-        const orders = await getBuyerOrders(uid);
+      });
+      unsubscribeRefs.current.push(unsubAll);
+
+      // Real-time orders — farmer sees new orders the moment a buyer places one
+      const unsubOrders = listenFarmerOrders(uid, (orders) => {
         setMyOrders(orders);
-      }
-    } catch (e) { console.warn('loadUserData error:', e); }
-    setListingsLoading(false);
+      });
+      unsubscribeRefs.current.push(unsubOrders);
+
+    } else {
+      const unsubAll = listenAllListings((listings) => {
+        setMarketListings(listings);
+        setListingsLoading(false);
+      });
+      unsubscribeRefs.current.push(unsubAll);
+
+      getBuyerOrders(uid)
+        .then(orders => setMyOrders(orders))
+        .catch(e => console.warn('getBuyerOrders error:', e));
+    }
   };
 
   const fetchLivePrice = useCallback(async (crop) => {
@@ -333,8 +353,10 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    stopListeners();
     try { await signOut(auth); } catch (_) { }
     setRole(null); setCurrentUser(null);
+    setMyListings([]); setMarketListings([]); setMyOrders([]);
     navigateTo('onboarding');
   };
 
@@ -422,27 +444,51 @@ export default function App() {
 
       {farmerTab === 'dashboard' ? (
         <ScrollView contentContainerStyle={S.scrollPad} showsVerticalScrollIndicator={false}>
-          {/* Earnings Hero */}
-          <View style={[S.heroCard, { backgroundColor: COLORS.primaryMid }]}>
-            <Text style={S.heroLabel}>{t("Today's Earnings", "आज की कमाई")}</Text>
-            <Text style={S.heroAmount}>₹ 4,500</Text>
-            <View style={S.heroTrend}>
-              <Text style={S.heroTrendText}>↑ 12% {t('from yesterday', 'कल से')}</Text>
-            </View>
-          </View>
+          {(() => {
+            const confirmedOrders = myOrders.filter(o => o.status === 'confirmed' || o.status === 'delivered');
+            const totalEarnings = confirmedOrders.reduce((sum, o) => sum + (o.totalAmount || (o.pricePerKg || 0) * (o.qty || 0)), 0);
+            const pendingCount = myOrders.filter(o => o.status === 'pending').length;
+            return (
+              <>
+                <View style={[S.heroCard, { backgroundColor: COLORS.primaryMid }]}>
+                  <Text style={S.heroLabel}>{t("Total Earnings", "कुल कमाई")}</Text>
+                  <Text style={S.heroAmount}>₹ {totalEarnings.toLocaleString()}</Text>
+                  <View style={S.heroTrend}>
+                    <Text style={S.heroTrendText}>
+                      {confirmedOrders.length} {t('completed orders', 'पूर्ण ऑर्डर')}
+                    </Text>
+                  </View>
+                </View>
 
-          <View style={S.statsGrid}>
-            <StatCard icon="📦" label={t('Products', 'उत्पाद')} value={String(myListings.length)} color={COLORS.primaryMid} bg={COLORS.primaryBg} />
-            <StatCard icon="🛒" label={t('Orders', 'ऑर्डर')} value="12" color={COLORS.warning} bg="#FFF3E0" />
-            <StatCard icon="⭐" label={t('Rating', 'रेटिंग')} value="4.8" color={COLORS.accent} bg={COLORS.accentLight} />
-          </View>
+                <View style={S.statsGrid}>
+                  <StatCard icon="📦" label={t('Products', 'उत्पाद')} value={String(myListings.length)} color={COLORS.primaryMid} bg={COLORS.primaryBg} />
+                  <StatCard icon="🛒" label={t('Orders', 'ऑर्डर')} value={String(myOrders.length)} color={COLORS.warning} bg="#FFF3E0" />
+                  <StatCard icon="⭐" label={t('Rating', 'रेटिंग')} value={myOrders.length > 0 ? '4.8' : '--'} color={COLORS.accent} bg={COLORS.accentLight} />
+                </View>
 
-          {/* Auction Quick-Access Banner */}
-          <TouchableOpacity
-            style={[S.auctionBanner]}
-            onPress={() => navigateTo('auction')}
-            activeOpacity={0.87}
-          >
+                {pendingCount > 0 && (
+                  <TouchableOpacity
+                    style={[S.signalCard, { borderLeftColor: COLORS.warning, backgroundColor: '#FFF8E1' }]}
+                    onPress={() => navigateTo('profile')}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={{ fontSize: 24 }}>⚠️</Text>
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={[S.signalTitle, { color: COLORS.warning }]}>
+                        {pendingCount} {t('pending order(s)', 'ऑर्डर बाकी हैं')}
+                      </Text>
+                      <Text style={S.signalText}>
+                        {t('Tap to accept or reject', 'स्वीकार या अस्वीकार करने के लिए टैप करें')}
+                      </Text>
+                    </View>
+                    <Text style={{ fontSize: 16, color: COLORS.warning, fontWeight: '800' }}>›</Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            );
+          })()}
+
+          <TouchableOpacity style={[S.auctionBanner]} onPress={() => navigateTo('auction')} activeOpacity={0.87}>
             <View style={S.auctionBannerLeft}>
               <Text style={{ fontSize: 28 }}>🔨</Text>
               <View style={{ marginLeft: 12, flex: 1 }}>
@@ -474,14 +520,79 @@ export default function App() {
             <Text style={[S.featureCardChevron, { color: COLORS.primaryMid }]}>›</Text>
           </TouchableOpacity>
 
+          {myOrders.length > 0 && (
+            <>
+              <SectionHeader
+                title={t('Recent Orders', 'हालिया ऑर्डर')}
+                action={t('View All →', 'सभी देखें →')}
+                onAction={() => navigateTo('profile')}
+              />
+              {myOrders.slice(0, 3).map((order) => {
+                const sc = {
+                  pending: { color: COLORS.warning, label: t('Pending', 'बाकी') },
+                  confirmed: { color: COLORS.success, label: t('Confirmed', 'पुष्टि') },
+                  delivered: { color: COLORS.primaryMid, label: t('Delivered', 'पहुंचाया') },
+                  rejected: { color: COLORS.danger, label: t('Rejected', 'अस्वीकृत') },
+                }[order.status] || { color: COLORS.textLight, label: order.status };
+                return (
+                  <TouchableOpacity key={order.id} style={[S.orderCard, { borderLeftColor: sc.color }]}
+                    onPress={() => navigateTo('profile')} activeOpacity={0.85}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Text style={{ fontSize: 26, marginRight: 12 }}>{order.cropEmoji || '🌿'}</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={S.orderCrop}>{order.cropName || 'Crop'} — {order.qty || 1} kg</Text>
+                        <Text style={S.orderMeta}>🛒 {order.buyerName || t('Buyer', 'खरीदार')} • ₹{order.totalAmount?.toLocaleString() || '--'}</Text>
+                      </View>
+                      <View style={[S.statusPill, { backgroundColor: sc.color + '1A' }]}>
+                        <Text style={[S.statusPillText, { color: sc.color }]}>{sc.label}</Text>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </>
+          )}
+
           <SectionHeader
             title={t('My Listings', 'मेरी फसलें')}
             action={t('+ Add', '+ जोड़ें')}
             onAction={() => navigateTo('addProduct')}
           />
+          {listingsLoading && (
+            <View style={{ alignItems: 'center', padding: 20 }}>
+              <ActivityIndicator color={COLORS.primaryMid} />
+            </View>
+          )}
+          {!listingsLoading && myListings.length === 0 && (
+            <View style={{ alignItems: 'center', paddingVertical: 24 }}>
+              <Text style={{ fontSize: 36, marginBottom: 8 }}>🌿</Text>
+              <Text style={{ color: COLORS.textLight, fontSize: 14, fontWeight: '600' }}>{t('No listings yet', 'अभी कोई लिस्टिंग नहीं')}</Text>
+              <TouchableOpacity style={{ marginTop: 10 }} onPress={() => navigateTo('addProduct')}>
+                <Text style={{ color: COLORS.primaryMid, fontWeight: '800', fontSize: 14 }}>+ {t('Add your first crop', 'पहली फसल जोड़ें')}</Text>
+              </TouchableOpacity>
+            </View>
+          )}
           {myListings.map((p, i) => (
-            <TouchableOpacity key={i} style={S.listingRow} activeOpacity={0.85}
-              onPress={() => Alert.alert(p.name, `${t('Price', 'मूल्य')}: ${p.price}\n${t('Available', 'उपलब्ध')}: ${p.qty}`)}>
+            <TouchableOpacity key={p.id || i} style={S.listingRow} activeOpacity={0.85}
+              onPress={() => Alert.alert(p.name, `${t('Price', 'मूल्य')}: ${p.price}\n${t('Available', 'उपलब्ध')}: ${p.qty}`)}
+              onLongPress={() => {
+                Alert.alert(
+                  t('Delete Listing?', 'लिस्टिंग हटाएं?'),
+                  t(`Remove "${p.name}" from your listings?`, `"${p.name}" को लिस्टिंग से हटाएं?`),
+                  [
+                    { text: t('Cancel', 'रद्द') },
+                    {
+                      text: t('Delete', 'हटाएं'), style: 'destructive', onPress: async () => {
+                        try {
+                          await deleteListing(p.id);
+                          setMyListings(prev => prev.filter(l => l.id !== p.id));
+                        } catch (e) { Alert.alert('Error', e.message); }
+                      }
+                    },
+                  ]
+                );
+              }}
+            >
               <View style={S.listingEmoji}><Text style={{ fontSize: 28 }}>{p.emoji}</Text></View>
               <View style={{ flex: 1 }}>
                 <Text style={S.listingName}>{t(p.name, p.nameHi)}</Text>
@@ -517,7 +628,6 @@ export default function App() {
             ))}
           </View>
 
-          {/* Price History */}
           <TouchableOpacity style={S.wideToolCard} onPress={() => { setAiSellAdvice(null); navigateTo('priceHistory'); }} activeOpacity={0.85}>
             <View style={[S.toolIconBg, { backgroundColor: '#FCE4EC', marginBottom: 0, marginRight: 16 }]}>
               <Text style={{ fontSize: 26 }}>📈</Text>
@@ -529,7 +639,6 @@ export default function App() {
             <Text style={{ fontSize: 22, color: COLORS.textLight }}>›</Text>
           </TouchableOpacity>
 
-          {/* Auction Tool Card */}
           <TouchableOpacity style={[S.wideToolCard, { marginTop: 12, borderColor: COLORS.primaryLight }]} onPress={() => navigateTo('auction')} activeOpacity={0.85}>
             <View style={[S.toolIconBg, { backgroundColor: '#FFF9C4', marginBottom: 0, marginRight: 16 }]}>
               <Text style={{ fontSize: 26 }}>🔨</Text>
@@ -778,36 +887,82 @@ export default function App() {
                   </TouchableOpacity>
                 ))}
               </ScrollView>
-              <View style={S.productsGrid}>
-                {[
-                  { name: t('Tomatoes', 'टमाटर'), price: '40', dist: '2.5 km', farmer: 'Ramesh Singh', emoji: '🍅', rating: 4.8 },
-                  { name: t('Potatoes', 'आलू'), price: '25', dist: '3.1 km', farmer: 'Kisan Kumar', emoji: '🥔', rating: 4.4 },
-                  { name: t('Apples', 'सेब'), price: '120', dist: '8.0 km', farmer: 'Suraj Farms', emoji: '🍎', rating: 4.6 },
-                  { name: t('Wheat', 'गेहूं'), price: '22', dist: '1.2 km', farmer: 'Village Co-op', emoji: '🌾', rating: 4.9 },
-                  { name: t('Onions', 'प्याज'), price: '32', dist: '4.1 km', farmer: 'Suresh Patel', emoji: '🧅', rating: 4.6 },
-                  { name: t('Chilli', 'मिर्च'), price: '95', dist: '5.8 km', farmer: 'Meena Devi', emoji: '🌶️', rating: 4.7 },
-                ].map((item, i) => (
-                  <TouchableOpacity key={i} style={S.productCard} onPress={() => {
-                    const matchedFarmer = NEARBY_FARMERS.find(f => f.name === item.farmer) || { name: item.farmer, dist: item.dist, rating: item.rating, reviews: 0, crops: [item.emoji + ' ' + item.name], verified: true, avatar: item.farmer.split(' ').map(w => w[0]).join(''), deliveries: 0, price: '₹' + item.price + '/kg' };
-                    setSelectedFarmer(matchedFarmer);
-                    setSelectedProduct(item);
-                    setChatMessages([{ from: 'farmer', text: t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।') + ' ' + item.emoji + ' ' + item.name + ' @ ₹' + item.price + '/kg' }]);
-                    setOfferPrice('');
-                    navigateTo('productDetail');
-                  }} activeOpacity={0.88}>
-                    <View style={[S.productCardEmoji, { backgroundColor: COLORS.primaryBg }]}>
-                      <Text style={{ fontSize: 36 }}>{item.emoji}</Text>
-                    </View>
-                    <Text style={S.productCardName}>{item.name}</Text>
-                    <Text style={[S.productCardPrice, { color: BC }]}>₹{item.price}/kg</Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
-                      <Text style={{ fontSize: 12, color: COLORS.accent }}>★</Text>
-                      <Text style={S.productCardMeta}> {item.rating} • {item.dist}</Text>
-                    </View>
-                    <Text style={S.productCardFarmer} numberOfLines={1}>{item.farmer}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
+              {listingsLoading && (
+                <View style={{ alignItems: 'center', padding: 20 }}>
+                  <ActivityIndicator color={BC} />
+                  <Text style={{ color: COLORS.textLight, marginTop: 8, fontSize: 13 }}>{t('Loading fresh produce...', 'ताजी उपज लोड हो रही है...')}</Text>
+                </View>
+              )}
+              {!listingsLoading && marketListings.length > 0 && (
+                <>
+                  <Text style={[S.sectionTitle, { marginBottom: 12 }]}>🌿 {t('Live from Farmers', 'किसानों से सीधे')}</Text>
+                  <View style={S.productsGrid}>
+                    {marketListings.map((item, i) => (
+                      <TouchableOpacity key={item.id || i} style={S.productCard} onPress={() => {
+                        const farmerObj = { name: item.farmerName, dist: '--', rating: 4.5, reviews: 0, crops: [item.emoji + ' ' + item.cropName], verified: true, avatar: (item.farmerName || '?').split(' ').map(w => w[0]).join(''), deliveries: 0, price: `₹${item.pricePerKg}/kg`, uid: item.farmerUid, id: item.farmerUid };
+                        setSelectedFarmer(farmerObj);
+                        setSelectedProduct(item);
+                        setChatMessages([{ from: 'farmer', text: t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।') + ' ' + item.emoji + ' ' + item.cropName + ' @ ₹' + item.pricePerKg + '/kg' }]);
+                        setOfferPrice('');
+                        navigateTo('productDetail');
+                      }} activeOpacity={0.88}>
+                        <View style={[S.productCardEmoji, { backgroundColor: COLORS.primaryBg }]}>
+                          <Text style={{ fontSize: 36 }}>{item.emoji || '🌿'}</Text>
+                        </View>
+                        <Text style={S.productCardName}>{item.cropName}</Text>
+                        <Text style={[S.productCardPrice, { color: BC }]}>₹{item.pricePerKg}/kg</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                          <Text style={{ fontSize: 12, color: COLORS.accent }}>★</Text>
+                          <Text style={S.productCardMeta}> {item.qty} kg avail</Text>
+                        </View>
+                        <Text style={S.productCardFarmer} numberOfLines={1}>{item.farmerName}</Text>
+                        <TouchableOpacity
+                          style={[S.addCartBtn, { marginTop: 8 }, cart.find(c => c.id === item.id) && { backgroundColor: COLORS.primaryBg, borderColor: COLORS.primaryMid, borderWidth: 1 }]}
+                          onPress={(e) => {
+                            e.stopPropagation && e.stopPropagation();
+                            setCart(prev => {
+                              const exists = prev.find(c => c.id === item.id);
+                              if (exists) return prev.map(c => c.id === item.id ? { ...c, qty: c.qty + 1 } : c);
+                              return [...prev, { id: item.id, name: item.cropName, cropName: item.cropName, emoji: item.emoji || '🌿', price: item.pricePerKg, pricePerKg: item.pricePerKg, qty: 1, farmerName: item.farmerName, farmerUid: item.farmerUid }];
+                            });
+                          }}
+                        >
+                          <Text style={[S.addCartBtnText, cart.find(c => c.id === item.id) && { color: COLORS.primaryMid }]}>
+                            {cart.find(c => c.id === item.id) ? `✓ ${t('In Cart', 'कार्ट में')} (${cart.find(c => c.id === item.id).qty})` : `+ ${t('Add to Cart', 'कार्ट में जोड़ें')}`}
+                          </Text>
+                        </TouchableOpacity>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </>
+              )}
+              {!listingsLoading && marketListings.length === 0 && (
+                <>
+                  <Text style={[S.sectionTitle, { marginBottom: 12, color: COLORS.textLight }]}>📦 {t('Sample Listings', 'नमूना सूची')}</Text>
+                  <View style={S.productsGrid}>
+                    {[
+                      { name: t('Tomatoes', 'टमाटर'), price: '40', dist: '2.5 km', farmer: 'Ramesh Singh', emoji: '🍅', rating: 4.8 },
+                      { name: t('Potatoes', 'आलू'), price: '25', dist: '3.1 km', farmer: 'Kisan Kumar', emoji: '🥔', rating: 4.4 },
+                      { name: t('Wheat', 'गेहूं'), price: '22', dist: '1.2 km', farmer: 'Village Co-op', emoji: '🌾', rating: 4.9 },
+                      { name: t('Onions', 'प्याज'), price: '32', dist: '4.1 km', farmer: 'Suresh Patel', emoji: '🧅', rating: 4.6 },
+                    ].map((item, i) => (
+                      <TouchableOpacity key={i} style={[S.productCard, { opacity: 0.7 }]} activeOpacity={0.88}
+                        onPress={() => Alert.alert(t('Sample Listing', 'नमूना'), t('No farmers have posted yet. Check back soon!', 'अभी कोई किसान नहीं। जल्द देखें!'))}>
+                        <View style={[S.productCardEmoji, { backgroundColor: COLORS.primaryBg }]}>
+                          <Text style={{ fontSize: 36 }}>{item.emoji}</Text>
+                        </View>
+                        <Text style={S.productCardName}>{item.name}</Text>
+                        <Text style={[S.productCardPrice, { color: BC }]}>₹{item.price}/kg</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                          <Text style={{ fontSize: 12, color: COLORS.accent }}>★</Text>
+                          <Text style={S.productCardMeta}> {item.rating} • {item.dist}</Text>
+                        </View>
+                        <Text style={S.productCardFarmer} numberOfLines={1}>{item.farmer}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </>
+              )}
             </ScrollView>
           </>
         ) : (
@@ -826,14 +981,79 @@ export default function App() {
                 <Text style={[S.infoBoxTitle, { color: BC }]}>👨🏽‍🌾 {t('Nearby Verified Farmers', 'नज़दीकी सत्यापित किसान')}</Text>
                 <Text style={[S.infoBoxText, { color: BC }]}>{t('Buy directly, negotiate prices & build trust with local farmers.', 'सीधे खरीदें, कीमत तय करें।')}</Text>
               </View>
+              {(() => {
+                const rfMap = {};
+                marketListings.forEach(l => {
+                  if (l.farmerUid && !rfMap[l.farmerUid]) {
+                    rfMap[l.farmerUid] = { id: l.farmerUid, uid: l.farmerUid, name: l.farmerName || 'Farmer', crops: [], verified: true, avatar: (l.farmerName || '?').split(' ').map(w => w[0]).join(''), rating: 4.5, reviews: 0, dist: '--', deliveries: 0, price: '--', badge: null };
+                  }
+                  if (l.farmerUid) rfMap[l.farmerUid].crops.push((l.emoji || '🌿') + ' ' + (l.cropName || ''));
+                });
+                const rf = Object.values(rfMap).filter(f =>
+                  farmerSearch === '' ||
+                  f.name.toLowerCase().includes(farmerSearch.toLowerCase()) ||
+                  f.crops.some(c => c.toLowerCase().includes(farmerSearch.toLowerCase()))
+                );
+                if (rf.length === 0) return null;
+                return (
+                  <>
+                    <Text style={[S.sectionTitle, { marginBottom: 12, color: COLORS.primaryMid }]}>🌿 {t('Active Farmers', 'सक्रिय किसान')}</Text>
+                    {rf.map((farmer) => (
+                      <TouchableOpacity key={farmer.id} style={[S.farmerCard, { borderColor: COLORS.primaryLight }]}
+                        onPress={() => {
+                          setSelectedFarmer(farmer);
+                          setSelectedProduct(null);
+                          setChatMessages([{ from: 'farmer', text: `${t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।')} (${farmer.crops.join(', ')})` }]);
+                          setOfferPrice('');
+                          navigateTo('productDetail');
+                        }} activeOpacity={0.88}>
+                        <View style={[S.farmerAvatar, { backgroundColor: COLORS.primaryBg }]}>
+                          <Text style={[S.farmerAvatarText, { color: COLORS.primaryMid }]}>{farmer.avatar}</Text>
+                        </View>
+                        <View style={{ flex: 1, marginLeft: 14 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                            <Text style={S.farmerName}>{farmer.name}</Text>
+                            <View style={[S.verifiedBadge, { backgroundColor: COLORS.primaryMid }]}>
+                              <Text style={[S.verifiedBadgeText, { color: '#fff' }]}>✓ {t('Real', 'असली')}</Text>
+                            </View>
+                          </View>
+                          <Text style={{ fontSize: 11, color: COLORS.textLight }}>ID: {farmer.uid.slice(0, 8)}…</Text>
+                          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                            <View style={{ flexDirection: 'row', gap: 6, marginTop: 6 }}>
+                              {farmer.crops.map((crop, ci) => (
+                                <View key={ci} style={[S.cropPill, { backgroundColor: COLORS.primaryBg }]}>
+                                  <Text style={[S.cropPillText, { color: COLORS.primaryMid }]}>{crop}</Text>
+                                </View>
+                              ))}
+                            </View>
+                          </ScrollView>
+                          <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                            <TouchableOpacity
+                              style={[S.contactBtn, { borderColor: BC, backgroundColor: BC }]}
+                              onPress={() => {
+                                setSelectedFarmer(farmer);
+                                setSelectedProduct(null);
+                                setChatMessages([{ from: 'farmer', text: `${t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।')} (${farmer.crops.join(', ')})` }]);
+                                setOfferPrice('');
+                                navigateTo('productDetail');
+                              }}
+                            >
+                              <Text style={[S.contactBtnText, { color: '#fff' }]}>💬 {t('Chat', 'चैट')}</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                    <Text style={[S.sectionTitle, { marginBottom: 12, marginTop: 16, color: COLORS.textLight }]}>📍 {t('Nearby Farmers', 'नज़दीकी किसान')}</Text>
+                  </>
+                );
+              })()}
               {filteredFarmers.map((farmer) => (
                 <TouchableOpacity key={farmer.id} style={S.farmerCard}
                   onPress={() => {
                     setSelectedFarmer(farmer);
                     setSelectedProduct(null);
-                    setChatMessages([
-                      { from: 'farmer', text: `${t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।')} (${farmer.crops.join(', ')})` },
-                    ]);
+                    setChatMessages([{ from: 'farmer', text: `${t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।')} (${farmer.crops.join(', ')})` }]);
                     setOfferPrice('');
                     navigateTo('productDetail');
                   }}
@@ -886,14 +1106,24 @@ export default function App() {
                         onPress={() => {
                           setSelectedFarmer(farmer);
                           setSelectedProduct(null);
-                          setChatMessages([
-                            { from: 'farmer', text: `${t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।')} (${farmer.crops.join(', ')})` },
-                          ]);
+                          setChatMessages([{ from: 'farmer', text: `${t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।')} (${farmer.crops.join(', ')})` }]);
                           setOfferPrice('');
                           navigateTo('productDetail');
                         }}
                       >
                         <Text style={[S.contactBtnText, { color: BC }]}>{t('Buy Now', 'खरीदें')}</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[S.contactBtn, { borderColor: BC, backgroundColor: BC + '0D', marginLeft: 8 }]}
+                        onPress={() => {
+                          setSelectedFarmer(farmer);
+                          setSelectedProduct(null);
+                          setChatMessages([{ from: 'farmer', text: `${t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।')} (${farmer.crops.join(', ')})` }]);
+                          setOfferPrice('');
+                          navigateTo('productDetail');
+                        }}
+                      >
+                        <Text style={[S.contactBtnText, { color: BC }]}>💬 {t('Chat', 'चैट')}</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -1354,9 +1584,7 @@ export default function App() {
     const [localQty, setLocalQty] = useState('');
     const [localPrice, setLocalPrice] = useState('');
     const [localCrop, setLocalCrop] = useState(cropName);
-
     const CROP_EMOJIS = { Tomato: '🍅', Wheat: '🌾', Onion: '🧅', Potato: '🥔', Garlic: '🧄', Rice: '🍚', Maize: '🌽', Soybean: '🫘', Mustard: '🌻', Cauliflower: '🥦', Chilli: '🌶️', Cotton: '🪴' };
-
     const [submitting, setSubmitting] = useState(false);
 
     const submitListing = async () => {
@@ -1364,35 +1592,17 @@ export default function App() {
         Alert.alert(t('Missing Info', 'जानकारी ज़रूरी'), t('Please fill all fields.', 'सभी फ़ील्ड भरें।'));
         return;
       }
-      const uid = currentUser?.uid || auth?.currentUser?.uid;
-      if (!uid) {
-        Alert.alert('Error', 'User ID not found. Please relogin.');
-        return;
-      }
       setSubmitting(true);
       const emoji = CROP_EMOJIS[localCrop] || '🌿';
       try {
         const newId = await addListing(
-          uid,
-          currentUser?.name || 'Farmer',
-          {
-            cropName: localCrop,
-            emoji,
-            pricePerKg: Number(localPrice),
-            qty: Number(localQty),
-            imageUrl: cropImage || null,
-          }
+          currentUser.uid,
+          currentUser.name,
+          { cropName: localCrop, emoji, pricePerKg: Number(localPrice), qty: Number(localQty), imageUrl: cropImage || null }
         );
-        // Update local state immediately so dashboard refreshes without reload
         setMyListings(prev => [{
-          id: newId,
-          emoji,
-          name: localCrop,
-          nameHi: localCrop,
-          price: `₹ ${localPrice}/kg`,
-          qty: `${localQty} kg`,
-          trend: '=',
-          farmerUid: currentUser.uid,
+          id: newId, emoji, name: localCrop, nameHi: localCrop,
+          price: `₹ ${localPrice}/kg`, qty: `${localQty} kg`, trend: '=', farmerUid: currentUser.uid,
         }, ...prev]);
         setCropImage(null); setCropName('');
         Alert.alert(
@@ -1452,9 +1662,7 @@ export default function App() {
           </View>
 
           <TouchableOpacity style={[S.primaryBtn, submitting && { opacity: 0.7 }]} onPress={submitListing} disabled={submitting} activeOpacity={0.88}>
-            {submitting
-              ? <ActivityIndicator color="#fff" />
-              : <Text style={S.primaryBtnText}>{t('List My Crop', 'फसल जोड़ें')}</Text>}
+            {submitting ? <ActivityIndicator color="#fff" /> : <Text style={S.primaryBtnText}>{t('List My Crop', 'फसल जोड़ें')}</Text>}
           </TouchableOpacity>
         </ScrollView>
       </View>
@@ -1473,8 +1681,6 @@ export default function App() {
     const cropEmoji = listing.emoji || farmer.crops[0]?.split(' ')[0] || '🌾';
     const cropName = listing.cropName || farmer.crops[0]?.split(' ').slice(1).join(' ') || 'Produce';
     const basePrice = listing.pricePerKg || parseInt(farmer.price?.match(/\d+/) || ['40']) || 40;
-
-    // threadId is stable per buyer↔listing pair
     const threadId = `${currentUser?.uid || 'guest'}_${listing.id || farmer.uid || farmer.name.replace(/\s/g, '')}`;
 
     const [qty, setQty] = React.useState(1);
@@ -1485,7 +1691,6 @@ export default function App() {
     const [sending, setSending] = React.useState(false);
     const [ordering, setOrdering] = React.useState(false);
 
-    // Load existing negotiation messages from Firestore on mount
     React.useEffect(() => {
       let unsub;
       try {
@@ -1511,17 +1716,10 @@ export default function App() {
         text: `${t('I want', 'मुझे चाहिए')} ${qty} kg. ${t('Can you do', 'क्या आप दे सकते हैं')} ₹${localOffer}/kg?`,
         offeredPrice: offerNum,
       };
-
-      // Save buyer message to Firestore
-      try {
-        await sendNegotiationMessage(threadId, buyerMsg);
-      } catch (e) { console.warn('sendNegotiationMessage error:', e); }
-
-      const updatedChat = [...localChat, { from: buyerMsg.from, text: buyerMsg.text }];
-      setLocalChat(updatedChat);
+      try { await sendNegotiationMessage(threadId, buyerMsg); } catch (e) { console.warn('sendNegotiationMessage error:', e); }
+      setLocalChat(prev => [...prev, { from: buyerMsg.from, text: buyerMsg.text }]);
       setLocalOffer('');
 
-      // Simulate farmer auto-reply
       setTimeout(async () => {
         let replyText;
         if (offerNum >= basePrice) {
@@ -1533,17 +1731,14 @@ export default function App() {
           replyText = `${t('Sorry, my price is', 'माफ करें, मेरी कीमत है')} ₹${basePrice}/kg. ${t('Cannot go lower.', 'और कम नहीं हो सकता।')}`;
         }
         const farmerReply = { from: 'farmer', senderUid: farmer.uid || 'farmer', text: replyText };
-        try {
-          await sendNegotiationMessage(threadId, farmerReply);
-        } catch (e) { console.warn('farmer reply save error:', e); }
+        try { await sendNegotiationMessage(threadId, farmerReply); } catch (e) { console.warn('farmer reply save error:', e); }
         setLocalChat(prev => [...prev, { from: farmerReply.from, text: farmerReply.text }]);
         setSending(false);
       }, 1200);
     };
 
     const handlePlaceOrder = async (pricePerKg) => {
-      const uid = currentUser?.uid || auth?.currentUser?.uid;
-      if (!uid) {
+      if (!currentUser?.uid) {
         Alert.alert(t('Login required', 'लॉगिन आवश्यक'), t('Please log in to place an order.', 'ऑर्डर करने के लिए लॉगिन करें।'));
         return;
       }
@@ -1551,18 +1746,13 @@ export default function App() {
       const totalAmount = pricePerKg * qty;
       try {
         const orderId = await fbPlaceOrder({
-          buyerUid: uid,
-          buyerName: currentUser?.name || 'Buyer',
+          buyerUid: currentUser.uid,
+          buyerName: currentUser.name || 'Buyer',
           farmerUid: farmer.uid || farmer.id || 'unknown',
           farmerName: farmer.name,
-          cropName,
-          cropEmoji,
-          qty,
-          pricePerKg,
-          totalAmount,
+          cropName, cropEmoji, qty, pricePerKg, totalAmount,
           listingId: listing.id || null,
         });
-        // Add to local orders list
         setMyOrders(prev => [{
           id: orderId, buyerUid: currentUser.uid, farmerName: farmer.name,
           cropName, cropEmoji, qty, pricePerKg, totalAmount, status: 'pending',
@@ -1596,7 +1786,6 @@ export default function App() {
                 </View>
               </View>
             </View>
-            {/* Qty picker */}
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16, backgroundColor: COLORS.primaryBg, borderRadius: 12, padding: 12 }}>
               <Text style={{ fontWeight: '700', color: COLORS.text }}>{t('Quantity (kg)', 'मात्रा (किलो)')}</Text>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
@@ -1611,7 +1800,6 @@ export default function App() {
             </View>
           </View>
 
-          {/* Negotiation Chat */}
           <View style={[S.formCard, { marginTop: 12 }]}>
             <Text style={[S.sectionHeader, { marginBottom: 12 }]}>💬 {t('Negotiate Price', 'कीमत तय करें')}</Text>
             <View style={S.chatBox}>
@@ -1637,7 +1825,6 @@ export default function App() {
             </View>
           </View>
 
-          {/* Order buttons */}
           <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
             <TouchableOpacity style={[S.secondaryBtn, { flex: 1, opacity: ordering ? 0.6 : 1 }]} onPress={() => handlePlaceOrder(basePrice)} disabled={ordering} activeOpacity={0.88}>
               <Text style={[S.secondaryBtnText, { color: BC }]}>{t('Buy @ ', 'खरीदें @ ')}₹{basePrice}/kg</Text>
@@ -1645,15 +1832,12 @@ export default function App() {
             <TouchableOpacity style={[S.primaryBtn, { flex: 1, marginTop: 0, backgroundColor: BC, opacity: ordering ? 0.6 : 1 }]}
               disabled={ordering}
               onPress={() => {
-                // Use last negotiated price if any
                 const lastFarmerMsg = [...localChat].reverse().find(m => m.from === 'farmer' && m.text.includes('₹'));
                 const match = lastFarmerMsg?.text?.match(/₹(\d+)/);
                 const agreedPrice = match ? parseInt(match[1]) : basePrice;
                 handlePlaceOrder(agreedPrice);
               }} activeOpacity={0.88}>
-              {ordering
-                ? <ActivityIndicator color="#fff" />
-                : <Text style={S.primaryBtnText}>{t('Order Now', 'अभी ऑर्डर करें')}</Text>}
+              {ordering ? <ActivityIndicator color="#fff" /> : <Text style={S.primaryBtnText}>{t('Order Now', 'अभी ऑर्डर करें')}</Text>}
             </TouchableOpacity>
           </View>
         </ScrollView>
@@ -1717,43 +1901,37 @@ export default function App() {
     );
   };
 
+  // ─── SCREEN: PROFILE ─────────────────────────────────────────────────────
   const ProfileScreen = () => {
     const isFarmer = role === 'farmer';
     const isRetailer = role === 'retailer';
+    const isBuyer = role === 'buyer';
     const backScreen = isFarmer ? 'farmerDashboard' : isRetailer ? 'retailerDashboard' : 'buyerMarketplace';
     const displayName = currentUser?.name || (isFarmer ? 'Farmer' : isRetailer ? 'Retailer' : 'Buyer');
     const displayPhone = currentUser?.phone ? `+91 ${currentUser.phone}` : '—';
     const accent = isFarmer ? COLORS.primaryMid : isRetailer ? COLORS.retailerMid : COLORS.buyerMid;
     const accentBg = isFarmer ? COLORS.primaryBg : isRetailer ? COLORS.retailerBg : COLORS.buyerBg;
 
-    const [locationText, setLocationText] = useState(t('Fetching...', 'ढूंढ रहा है...'));
+    const realFarmersMap = {};
+    marketListings.forEach(l => {
+      if (l.farmerUid && !realFarmersMap[l.farmerUid]) {
+        realFarmersMap[l.farmerUid] = { uid: l.farmerUid, name: l.farmerName || 'Farmer', crops: [] };
+      }
+      if (l.farmerUid && realFarmersMap[l.farmerUid]) {
+        realFarmersMap[l.farmerUid].crops.push((l.emoji || '🌿') + ' ' + (l.cropName || ''));
+      }
+    });
+    const realFarmers = Object.values(realFarmersMap);
 
-    useEffect(() => {
-      (async () => {
-        try {
-          let { status } = await Location.requestForegroundPermissionsAsync();
-          if (status !== 'granted') {
-            setLocationText(t('Permission Denied', 'अनुमति नहीं दी गई'));
-            return;
-          }
-          let location = await Location.getCurrentPositionAsync({});
-          let geocode = await Location.reverseGeocodeAsync({
-            latitude: location.coords.latitude,
-            longitude: location.coords.longitude
-          });
-          if (geocode && geocode.length > 0) {
-            let city = geocode[0].city || geocode[0].district || geocode[0].subregion || '';
-            let state = geocode[0].region || '';
-            setLocationText(`${city}${city && state ? ', ' : ''}${state}`);
-          } else {
-            setLocationText(t('Location Not Found', 'स्थान नहीं मिला'));
-          }
-        } catch (error) {
-          console.warn("Profile location error:", error);
-          setLocationText(t('Error fetching', 'त्रुटि'));
-        }
-      })();
-    }, []);
+    const buyerCartTotal = cart.reduce((sum, c) => sum + c.price * c.qty, 0);
+
+    const updateCartQty = (itemId, delta) => {
+      setCart(prev => prev.map(c => {
+        if (c.id !== itemId) return c;
+        const newQty = c.qty + delta;
+        return newQty > 0 ? { ...c, qty: newQty } : c;
+      }).filter(c => c.qty > 0));
+    };
 
     return (
       <View style={S.screen}>
@@ -1779,7 +1957,7 @@ export default function App() {
               [t('Mobile', 'मोबाइल'), displayPhone],
               [t('Role', 'भूमिका'), isFarmer ? '🚜 Farmer' : isRetailer ? '🏬 Retailer' : '🛒 Buyer'],
               [t('Member Since', 'सदस्य बने'), currentUser?.createdAt ? new Date(currentUser.createdAt?.toDate?.() || currentUser.createdAt).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : t('Recently', 'हाल ही में')],
-              [t('Location', 'स्थान'), locationText],
+              [t('Location', 'स्थान'), 'Indore, MP'],
             ].map(([label, val], i, arr) => (
               <View key={i} style={[S.detailRow, { borderBottomWidth: i < arr.length - 1 ? 1 : 0 }]}>
                 <Text style={S.detailRowLabel}>{label}</Text>
@@ -1787,6 +1965,302 @@ export default function App() {
               </View>
             ))}
           </View>
+
+          {isBuyer && (
+            <View style={S.formCard}>
+              <Text style={S.cardSectionTitle}>🛒 {t('My Cart', 'मेरी कार्ट')}</Text>
+              {cart.length === 0 ? (
+                <View style={{ alignItems: 'center', paddingVertical: 20 }}>
+                  <Text style={{ fontSize: 36, marginBottom: 8 }}>🛒</Text>
+                  <Text style={{ color: COLORS.textLight, fontSize: 14 }}>{t('Your cart is empty', 'आपकी कार्ट खाली है')}</Text>
+                  <TouchableOpacity style={{ marginTop: 12 }} onPress={() => navigateTo('buyerMarketplace')}>
+                    <Text style={{ color: accent, fontWeight: '800', fontSize: 14 }}>{t('Browse Market →', 'बाज़ार देखें →')}</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <>
+                  {cart.map((item) => (
+                    <View key={item.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: COLORS.borderLight }}>
+                      <Text style={{ fontSize: 26, marginRight: 12 }}>{item.emoji || '🌿'}</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontSize: 14, fontWeight: '700', color: COLORS.text }}>{item.cropName || item.name}</Text>
+                        <Text style={{ fontSize: 12, color: COLORS.textLight }}>{item.farmerName || ''}</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginRight: 12 }}>
+                        <TouchableOpacity onPress={() => updateCartQty(item.id, -1)} style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: COLORS.borderLight, justifyContent: 'center', alignItems: 'center' }}>
+                          <Text style={{ fontSize: 16, fontWeight: '800', color: COLORS.text }}>−</Text>
+                        </TouchableOpacity>
+                        <Text style={{ fontSize: 15, fontWeight: '800', color: COLORS.text, minWidth: 20, textAlign: 'center' }}>{item.qty}</Text>
+                        <TouchableOpacity onPress={() => updateCartQty(item.id, 1)} style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: accent, justifyContent: 'center', alignItems: 'center' }}>
+                          <Text style={{ fontSize: 16, fontWeight: '800', color: '#fff' }}>+</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <Text style={{ fontSize: 14, fontWeight: '800', color: accent, minWidth: 60, textAlign: 'right' }}>₹{(item.price || item.pricePerKg || 0) * item.qty}</Text>
+                    </View>
+                  ))}
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, paddingTop: 12, borderTopWidth: 1.5, borderTopColor: COLORS.border }}>
+                    <Text style={{ fontSize: 16, fontWeight: '800', color: COLORS.text }}>{t('Total', 'कुल')}</Text>
+                    <Text style={{ fontSize: 20, fontWeight: '900', color: accent }}>₹{buyerCartTotal.toLocaleString()}</Text>
+                  </View>
+                  <TouchableOpacity style={[S.primaryBtn, { backgroundColor: accent, marginTop: 12 }]} onPress={() => { Alert.alert('✅ ' + t('Order Placed!', 'ऑर्डर हो गया!'), t('Your order has been placed successfully.', 'आपका ऑर्डर सफलतापूर्वक हो गया।')); setCart([]); }} activeOpacity={0.88}>
+                    <Text style={S.primaryBtnText}>{t('Checkout', 'चेकआउट')} — ₹{buyerCartTotal.toLocaleString()}</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          )}
+
+          {isBuyer && realFarmers.length > 0 && (
+            <View style={S.formCard}>
+              <Text style={S.cardSectionTitle}>👨🏽‍🌾 {t('Farmers on KisanDirect', 'किसानडायरेक्ट पर किसान')}</Text>
+              <Text style={{ fontSize: 12, color: COLORS.textLight, marginBottom: 14 }}>{t('Real farmers selling on the platform', 'प्लेटफ़ॉर्म पर बेचने वाले असली किसान')}</Text>
+              {realFarmers.map((farmer, i) => (
+                <View key={farmer.uid} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: i < realFarmers.length - 1 ? 1 : 0, borderBottomColor: COLORS.borderLight }}>
+                  <View style={[S.farmerAvatar, { backgroundColor: COLORS.primaryBg, width: 44, height: 44 }]}>
+                    <Text style={{ fontSize: 15, fontWeight: '900', color: COLORS.primaryMid }}>{(farmer.name || '?').charAt(0).toUpperCase()}</Text>
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: COLORS.text }}>{farmer.name}</Text>
+                    <Text style={{ fontSize: 11, color: COLORS.textLight, marginTop: 2 }}>ID: {farmer.uid.slice(0, 8)}…</Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                      {farmer.crops.slice(0, 4).map((crop, ci) => (
+                        <View key={ci} style={[S.cropPill, { backgroundColor: COLORS.primaryBg }]}>
+                          <Text style={[S.cropPillText, { color: COLORS.primaryMid }]}>{crop}</Text>
+                        </View>
+                      ))}
+                      {farmer.crops.length > 4 && (
+                        <View style={[S.cropPill, { backgroundColor: COLORS.surfaceAlt }]}>
+                          <Text style={[S.cropPillText, { color: COLORS.textLight }]}>+{farmer.crops.length - 4}</Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                  <View style={[S.verifiedBadge, { backgroundColor: COLORS.primaryBg }]}>
+                    <Text style={{ fontSize: 10, fontWeight: '800', color: COLORS.primaryMid }}>✓ {t('Active', 'सक्रिय')}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {isFarmer && (
+            <View style={S.formCard}>
+              <Text style={S.cardSectionTitle}>📋 {t('Manage Orders', 'ऑर्डर प्रबंधन')}</Text>
+              {myOrders.length === 0 ? (
+                <View style={{ alignItems: 'center', paddingVertical: 20 }}>
+                  <Text style={{ fontSize: 36, marginBottom: 8 }}>📦</Text>
+                  <Text style={{ color: COLORS.textLight, fontSize: 14 }}>{t('No orders yet', 'अभी तक कोई ऑर्डर नहीं')}</Text>
+                  <Text style={{ color: COLORS.textLight, fontSize: 12, marginTop: 4, textAlign: 'center' }}>{t('Orders from buyers will appear here', 'खरीदारों के ऑर्डर यहाँ दिखेंगे')}</Text>
+                </View>
+              ) : (
+                <>
+                  <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
+                    {[
+                      { label: t('Pending', 'बाकी'), count: myOrders.filter(o => o.status === 'pending').length, color: COLORS.warning, bg: '#FFF3E0' },
+                      { label: t('Confirmed', 'पुष्टि'), count: myOrders.filter(o => o.status === 'confirmed').length, color: COLORS.success, bg: COLORS.primaryBg },
+                      { label: t('Delivered', 'पहुंचाया'), count: myOrders.filter(o => o.status === 'delivered').length, color: COLORS.primaryMid, bg: COLORS.primaryBg },
+                      { label: t('Rejected', 'अस्वीकृत'), count: myOrders.filter(o => o.status === 'rejected').length, color: COLORS.danger, bg: COLORS.dangerLight },
+                    ].map((s, i) => (
+                      <View key={i} style={{ flex: 1, backgroundColor: s.bg, borderRadius: 12, padding: 10, alignItems: 'center' }}>
+                        <Text style={{ fontSize: 18, fontWeight: '900', color: s.color }}>{s.count}</Text>
+                        <Text style={{ fontSize: 9, fontWeight: '700', color: s.color, marginTop: 2 }}>{s.label}</Text>
+                      </View>
+                    ))}
+                  </View>
+                  {[...myOrders].sort((a, b) => {
+                    const priority = { pending: 0, confirmed: 1, delivered: 2, rejected: 3 };
+                    return (priority[a.status] ?? 4) - (priority[b.status] ?? 4);
+                  }).map((order) => {
+                    const statusConfig = {
+                      pending: { label: t('Pending', 'बाकी'), color: COLORS.warning, emoji: '⏳' },
+                      confirmed: { label: t('Confirmed', 'पुष्टि'), color: COLORS.success, emoji: '✅' },
+                      delivered: { label: t('Delivered', 'पहुंचाया'), color: COLORS.primaryMid, emoji: '🚚' },
+                      rejected: { label: t('Rejected', 'अस्वीकृत'), color: COLORS.danger, emoji: '❌' },
+                    };
+                    const sc = statusConfig[order.status] || statusConfig.pending;
+                    return (
+                      <View key={order.id} style={{ backgroundColor: COLORS.surfaceAlt, borderRadius: 16, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: COLORS.borderLight, borderLeftWidth: 4, borderLeftColor: sc.color }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                          <Text style={{ fontSize: 24, marginRight: 10 }}>{order.cropEmoji || '🌿'}</Text>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 14, fontWeight: '800', color: COLORS.text }}>{order.cropName || 'Crop'} — {order.qty || 1} kg</Text>
+                            <Text style={{ fontSize: 12, color: COLORS.textLight, marginTop: 2 }}>🛒 {order.buyerName || t('Buyer', 'खरीदार')} • ₹{order.pricePerKg || '--'}/kg</Text>
+                          </View>
+                          <View style={[S.statusPill, { backgroundColor: sc.color + '1A' }]}>
+                            <Text style={[S.statusPillText, { color: sc.color }]}>{sc.emoji} {sc.label}</Text>
+                          </View>
+                        </View>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Text style={{ fontSize: 16, fontWeight: '900', color: accent }}>₹{(order.totalAmount || (order.pricePerKg || 0) * (order.qty || 1)).toLocaleString()}</Text>
+                          {order.status === 'pending' && (
+                            <View style={{ flexDirection: 'row', gap: 8 }}>
+                              <TouchableOpacity
+                                style={{ backgroundColor: COLORS.danger + '15', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 10, borderWidth: 1, borderColor: COLORS.danger + '40' }}
+                                onPress={() => {
+                                  Alert.alert(
+                                    t('Reject Order?', 'ऑर्डर अस्वीकार करें?'),
+                                    t('This order will be rejected.', 'यह ऑर्डर अस्वीकार हो जाएगा।'),
+                                    [
+                                      { text: t('Cancel', 'रद्द') },
+                                      {
+                                        text: t('Reject', 'अस्वीकार'), style: 'destructive', onPress: async () => {
+                                          try {
+                                            await updateOrderStatus(order.id, 'rejected');
+                                            setMyOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: 'rejected' } : o));
+                                          } catch (e) { Alert.alert('Error', e.message); }
+                                        }
+                                      },
+                                    ]
+                                  );
+                                }}
+                              >
+                                <Text style={{ color: COLORS.danger, fontWeight: '800', fontSize: 12 }}>✕ {t('Reject', 'अस्वीकार')}</Text>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={{ backgroundColor: COLORS.success, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 10 }}
+                                onPress={async () => {
+                                  try {
+                                    await updateOrderStatus(order.id, 'confirmed');
+                                    setMyOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: 'confirmed' } : o));
+                                  } catch (e) { Alert.alert('Error', e.message); }
+                                }}
+                              >
+                                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 12 }}>✓ {t('Accept', 'स्वीकार')}</Text>
+                              </TouchableOpacity>
+                            </View>
+                          )}
+                          {order.status === 'confirmed' && (
+                            <TouchableOpacity
+                              style={{ backgroundColor: COLORS.primaryMid, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 10 }}
+                              onPress={async () => {
+                                try {
+                                  await updateOrderStatus(order.id, 'delivered');
+                                  setMyOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: 'delivered' } : o));
+                                } catch (e) { Alert.alert('Error', e.message); }
+                              }}
+                            >
+                              <Text style={{ color: '#fff', fontWeight: '800', fontSize: 12 }}>🚚 {t('Mark Delivered', 'पहुंचाया')}</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      </View>
+                    );
+                  })}
+                </>
+              )}
+            </View>
+          )}
+
+          {isFarmer && (() => {
+            const [weather, setWeather] = React.useState(null);
+            const [weatherLoading, setWeatherLoading] = React.useState(true);
+
+            React.useEffect(() => {
+              fetch('https://api.open-meteo.com/v1/forecast?latitude=22.72&longitude=75.86&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max&timezone=Asia/Kolkata&forecast_days=5')
+                .then(r => r.json())
+                .then(data => { setWeather(data); setWeatherLoading(false); })
+                .catch(() => setWeatherLoading(false));
+            }, []);
+
+            const weatherLabel = (code) => {
+              if (code <= 1) return { emoji: '☀️', label: t('Clear', 'साफ़') };
+              if (code <= 3) return { emoji: '⛅', label: t('Partly Cloudy', 'आंशिक बादल') };
+              if (code <= 48) return { emoji: '🌫️', label: t('Foggy', 'कोहरा') };
+              if (code <= 67) return { emoji: '🌧️', label: t('Rainy', 'बारिश') };
+              if (code <= 77) return { emoji: '🌨️', label: t('Snow', 'बर्फ़') };
+              if (code <= 82) return { emoji: '⛈️', label: t('Heavy Rain', 'तेज़ बारिश') };
+              if (code <= 99) return { emoji: '🌩️', label: t('Thunderstorm', 'आंधी') };
+              return { emoji: '🌤️', label: t('Fair', 'ठीक') };
+            };
+
+            const getSuggestions = (data) => {
+              if (!data?.current || !data?.daily) return [];
+              const tips = [];
+              const humidity = data.current.relative_humidity_2m;
+              const wind = data.current.wind_speed_10m;
+              const rain5d = data.daily.precipitation_sum?.reduce((s, v) => s + v, 0) || 0;
+              const maxTemp = Math.max(...(data.daily.temperature_2m_max || [0]));
+              const minTemp = Math.min(...(data.daily.temperature_2m_min || [40]));
+
+              if (rain5d > 20) tips.push({ icon: '🌧️', tip: t('Heavy rain expected — delay sowing, ensure drainage channels are clear.', 'भारी बारिश आने वाली है — बुआई रोकें, नालियाँ साफ़ रखें।'), color: '#1565C0' });
+              else if (rain5d > 5) tips.push({ icon: '💧', tip: t('Light rain ahead — good time for transplanting. Reduce irrigation.', 'हल्की बारिश आएगी — रोपाई का अच्छा समय। सिंचाई कम करें।'), color: '#2196F3' });
+              else tips.push({ icon: '☀️', tip: t('Dry days ahead — ensure regular irrigation for standing crops.', 'सूखे दिन आएंगे — खड़ी फ़सल की सिंचाई नियमित रखें।'), color: '#FF8F00' });
+              if (maxTemp > 40) tips.push({ icon: '🔥', tip: t('Heat wave alert! Use mulching to protect soil. Water crops early morning.', 'लू की चेतावनी! मल्चिंग करें। सुबह जल्दी पानी दें।'), color: '#D32F2F' });
+              if (minTemp < 8) tips.push({ icon: '🥶', tip: t('Frost risk! Cover nursery beds. Avoid irrigation at night.', 'पाला का ख़तरा! पौधशाला को ढकें। रात में सिंचाई न करें।'), color: '#7B1FA2' });
+              if (wind > 25) tips.push({ icon: '💨', tip: t('High winds — avoid spraying pesticides. Support tall crops with stakes.', 'तेज़ हवा — कीटनाशक छिड़काव न करें। लंबी फ़सल को सहारा दें।'), color: '#455A64' });
+              if (humidity > 80) tips.push({ icon: '🍄', tip: t('High humidity — watch for fungal diseases. Apply fungicide if needed.', 'अधिक नमी — फफूंद रोग का ख़तरा। ज़रूरत पर दवा छिड़कें।'), color: '#00695C' });
+              tips.push({ icon: '📅', tip: t('Check mandi prices before harvesting to maximize your profit.', 'कटाई से पहले मंडी भाव चेक करें — ज़्यादा मुनाफ़ा कमाएं।'), color: COLORS.primaryMid });
+              return tips;
+            };
+
+            if (weatherLoading) {
+              return (
+                <View style={S.formCard}>
+                  <Text style={S.cardSectionTitle}>🌤️ {t('Weather Forecast', 'मौसम पूर्वानुमान')}</Text>
+                  <ActivityIndicator color={COLORS.primaryMid} style={{ padding: 20 }} />
+                </View>
+              );
+            }
+            if (!weather?.current) {
+              return (
+                <View style={S.formCard}>
+                  <Text style={S.cardSectionTitle}>🌤️ {t('Weather Forecast', 'मौसम पूर्वानुमान')}</Text>
+                  <Text style={{ color: COLORS.textLight, textAlign: 'center', padding: 16 }}>{t('Weather data unavailable. Check your internet connection.', 'मौसम डेटा उपलब्ध नहीं। इंटरनेट जांचें।')}</Text>
+                </View>
+              );
+            }
+
+            const currentW = weatherLabel(weather.current.weather_code);
+            const suggestions = getSuggestions(weather);
+
+            return (
+              <View style={S.formCard}>
+                <Text style={S.cardSectionTitle}>🌤️ {t('Weather Forecast', 'मौसम पूर्वानुमान')}</Text>
+                <View style={{ backgroundColor: COLORS.primaryBg, borderRadius: 16, padding: 16, marginBottom: 14, flexDirection: 'row', alignItems: 'center' }}>
+                  <Text style={{ fontSize: 44 }}>{currentW.emoji}</Text>
+                  <View style={{ flex: 1, marginLeft: 16 }}>
+                    <Text style={{ fontSize: 28, fontWeight: '900', color: COLORS.text }}>{weather.current.temperature_2m}°C</Text>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: COLORS.primaryMid }}>{currentW.label}</Text>
+                    <Text style={{ fontSize: 11, color: COLORS.textLight, marginTop: 4 }}>
+                      💧 {weather.current.relative_humidity_2m}% · 💨 {weather.current.wind_speed_10m} km/h
+                    </Text>
+                  </View>
+                  <View style={{ alignItems: 'flex-end' }}>
+                    <Text style={{ fontSize: 12, color: COLORS.textLight }}>📍 Indore</Text>
+                    <Text style={{ fontSize: 11, color: COLORS.textLight, marginTop: 2 }}>{new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}</Text>
+                  </View>
+                </View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    {weather.daily?.time?.map((day, i) => {
+                      const code = weather.daily.weather_code?.[i] || 0;
+                      const wl = weatherLabel(code);
+                      const dateLabel = i === 0 ? t('Today', 'आज') : new Date(day).toLocaleDateString('en-IN', { weekday: 'short' });
+                      return (
+                        <View key={i} style={{ backgroundColor: i === 0 ? COLORS.primaryMid : COLORS.surfaceAlt, borderRadius: 14, padding: 12, alignItems: 'center', minWidth: 72, borderWidth: 1, borderColor: COLORS.borderLight }}>
+                          <Text style={{ fontSize: 10, fontWeight: '800', color: i === 0 ? '#fff' : COLORS.textLight, marginBottom: 6 }}>{dateLabel}</Text>
+                          <Text style={{ fontSize: 22 }}>{wl.emoji}</Text>
+                          <Text style={{ fontSize: 13, fontWeight: '800', color: i === 0 ? '#fff' : COLORS.text, marginTop: 4 }}>{Math.round(weather.daily.temperature_2m_max?.[i])}°</Text>
+                          <Text style={{ fontSize: 11, color: i === 0 ? 'rgba(255,255,255,0.7)' : COLORS.textLight }}>{Math.round(weather.daily.temperature_2m_min?.[i])}°</Text>
+                          {weather.daily.precipitation_sum?.[i] > 0 && (
+                            <Text style={{ fontSize: 9, color: i === 0 ? '#B3E5FC' : '#1E88E5', fontWeight: '800', marginTop: 3 }}>💧{weather.daily.precipitation_sum[i]}mm</Text>
+                          )}
+                        </View>
+                      );
+                    })}
+                  </View>
+                </ScrollView>
+                <Text style={{ fontSize: 14, fontWeight: '800', color: COLORS.text, marginBottom: 10 }}>🌾 {t('Farming Suggestions', 'खेती के सुझाव')}</Text>
+                {suggestions.map((s, i) => (
+                  <View key={i} style={{ flexDirection: 'row', alignItems: 'flex-start', backgroundColor: s.color + '0D', borderRadius: 12, padding: 12, marginBottom: 8, borderLeftWidth: 3, borderLeftColor: s.color }}>
+                    <Text style={{ fontSize: 20, marginRight: 10 }}>{s.icon}</Text>
+                    <Text style={{ flex: 1, fontSize: 13, color: COLORS.text, lineHeight: 20 }}>{s.tip}</Text>
+                  </View>
+                ))}
+              </View>
+            );
+          })()}
+
           <TouchableOpacity style={[S.primaryBtn, { backgroundColor: COLORS.danger, marginTop: 8 }]} onPress={handleLogout} activeOpacity={0.88}>
             <Text style={S.primaryBtnText}>🚪 {t('Sign Out', 'साइन आउट')}</Text>
           </TouchableOpacity>
@@ -1801,19 +2275,18 @@ export default function App() {
   return (
     <View style={S.mainWrapper}>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.surface} />
-
       {currentScreen === 'onboarding' && (
         <LoginScreen
           language={language}
           onLanguageChange={setLanguage}
           t={t}
           onLogin={(selectedRole, user) => {
-            // ── ROLE GUARD: Always use role from Firestore (user object), not the UI selection ──
             const trustedRole = user?.role || selectedRole;
             setRole(trustedRole);
             setCurrentUser(user);
             if (user?.language) setLanguage(user.language);
             navigateTo(ROLE_CONFIG[trustedRole].screen);
+            loadUserData(user.uid, trustedRole);
           }}
         />
       )}
@@ -1846,7 +2319,6 @@ export default function App() {
 const S = StyleSheet.create({
   mainWrapper: { flex: 1, backgroundColor: COLORS.bg },
   screen: { flex: 1, backgroundColor: COLORS.bg },
-
   appHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 58, paddingBottom: 16, backgroundColor: COLORS.surface, borderBottomWidth: 1 },
   headerLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 12 },
   headerIconBox: { width: 46, height: 46, borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
@@ -1854,66 +2326,50 @@ const S = StyleSheet.create({
   headerSubtitle: { fontSize: 12, fontWeight: '600', marginTop: 2, letterSpacing: 0.2 },
   avatarBtn: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
   avatarBtnText: { fontSize: 17, fontWeight: '800' },
-
   backHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 58, paddingBottom: 16, backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.borderLight },
   backBtn2: { width: 40, height: 40, borderRadius: 12, backgroundColor: COLORS.surfaceAlt, justifyContent: 'center', alignItems: 'center' },
   backArrow: { fontSize: 24, color: COLORS.text, lineHeight: 28 },
   backTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text, flex: 1, textAlign: 'center', marginHorizontal: 8 },
-
   tabBar: { flexDirection: 'row', backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.borderLight },
   tabItem: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 10, gap: 3, position: 'relative' },
   tabItemActive: {},
   tabLabel: { fontSize: 11, fontWeight: '700', color: COLORS.textLight, letterSpacing: 0.2 },
   tabIndicator: { position: 'absolute', bottom: 0, left: '20%', right: '20%', height: 2.5, borderRadius: 2 },
-
   scrollPad: { padding: 20, paddingBottom: 100 },
-
   heroCard: { borderRadius: 24, padding: 24, marginBottom: 16, overflow: 'hidden' },
   heroLabel: { fontSize: 13, color: 'rgba(255,255,255,0.8)', fontWeight: '600', letterSpacing: 0.3 },
   heroAmount: { fontSize: 38, fontWeight: '900', color: '#fff', letterSpacing: -1, marginTop: 6, marginBottom: 6 },
   heroTrend: { backgroundColor: 'rgba(255,255,255,0.2)', alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
   heroTrendText: { fontSize: 12, color: '#fff', fontWeight: '700' },
-
-  // Auction Banner (new)
-  auctionBanner: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: '#1B3A1E', borderRadius: 18, padding: 16, marginBottom: 16,
-  },
+  auctionBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1B3A1E', borderRadius: 18, padding: 16, marginBottom: 16 },
   auctionBannerLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   auctionBannerTitle: { fontSize: 15, fontWeight: '800', color: '#fff' },
   auctionBannerSub: { fontSize: 12, color: 'rgba(255,255,255,0.7)', marginTop: 3 },
   auctionLivePill: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.15)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
   auctionLiveTxt: { color: '#fff', fontSize: 12, fontWeight: '900', letterSpacing: 0.5 },
-
   statsGrid: { flexDirection: 'row', gap: 10, marginBottom: 16 },
   statCard: { flex: 1, borderRadius: 16, padding: 14, alignItems: 'center' },
   statValue: { fontSize: 20, fontWeight: '900', marginBottom: 3 },
   statLabel: { fontSize: 10, color: COLORS.textLight, fontWeight: '700', textAlign: 'center', letterSpacing: 0.2 },
-
   signalCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 16, padding: 14, marginBottom: 16, gap: 12, borderLeftWidth: 4, borderWidth: 1, borderColor: COLORS.borderLight },
   signalDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.primaryLight },
   signalTitle: { fontSize: 13, fontWeight: '700', color: COLORS.text, marginBottom: 3 },
   signalText: { fontSize: 12, color: COLORS.textMid, lineHeight: 18 },
-
   featureCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 18, padding: 16, marginBottom: 20, gap: 14, borderWidth: 1, borderColor: COLORS.borderLight },
   featureCardIcon: { width: 52, height: 52, borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
   featureCardTitle: { fontSize: 15, fontWeight: '700', color: COLORS.text, marginBottom: 3 },
   featureCardSub: { fontSize: 12, color: COLORS.textLight },
   featureCardChevron: { fontSize: 24, fontWeight: '300' },
-
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, marginTop: 4 },
   sectionTitle: { fontSize: 17, fontWeight: '800', color: COLORS.text, letterSpacing: -0.3 },
   sectionAction: { fontSize: 13, fontWeight: '700' },
-
   listingRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 16, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: COLORS.borderLight },
   listingEmoji: { width: 50, height: 50, borderRadius: 14, backgroundColor: COLORS.primaryBg, justifyContent: 'center', alignItems: 'center', marginRight: 14 },
   listingName: { fontSize: 15, fontWeight: '700', color: COLORS.text },
   listingQty: { fontSize: 12, color: COLORS.textLight, marginTop: 3 },
   listingPrice: { fontSize: 15, fontWeight: '800' },
   listingTrend: { fontSize: 12, fontWeight: '700', marginTop: 3 },
-
   fab: { position: 'absolute', bottom: 28, right: 22, width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', elevation: 6, shadowColor: COLORS.primaryMid, shadowOpacity: 0.35, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } },
-
   toolsTagline: { fontSize: 13, color: COLORS.textMid, marginBottom: 20, lineHeight: 20 },
   toolsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 12 },
   toolCard: { width: (SCREEN_WIDTH - 52) / 2, backgroundColor: COLORS.surface, borderRadius: 20, padding: 18, borderWidth: 1, borderColor: COLORS.borderLight },
@@ -1921,34 +2377,26 @@ const S = StyleSheet.create({
   toolTitle: { fontSize: 14, fontWeight: '800', color: COLORS.text, marginBottom: 5, letterSpacing: -0.2 },
   toolDesc: { fontSize: 12, color: COLORS.textLight, lineHeight: 17 },
   wideToolCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 20, padding: 18, gap: 14, borderWidth: 1, borderColor: COLORS.borderLight },
-
   pillBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
   pillBadgeText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.3 },
-
   infoBox: { backgroundColor: COLORS.primaryBg, borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: COLORS.primaryBgDark },
   infoBoxTitle: { fontSize: 14, fontWeight: '800', marginBottom: 5, color: COLORS.primaryMid },
   infoBoxText: { fontSize: 13, lineHeight: 19, color: COLORS.primaryMid },
-
   formCard: { backgroundColor: COLORS.surface, borderRadius: 20, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: COLORS.borderLight },
   cardSectionTitle: { fontSize: 15, fontWeight: '800', color: COLORS.text, marginBottom: 14 },
-
   inputLabel: { fontSize: 13, fontWeight: '700', color: COLORS.textMid, marginBottom: 8, letterSpacing: 0.1 },
   input: { backgroundColor: COLORS.surfaceAlt, borderWidth: 1.5, borderColor: COLORS.border, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 13, fontSize: 15, color: COLORS.text },
   micOverlay: { position: 'absolute', right: 4, backgroundColor: COLORS.primaryMid, padding: 10, borderRadius: 10 },
-
   searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, marginHorizontal: 20, marginVertical: 12, paddingHorizontal: 14, borderRadius: 16, borderWidth: 1.5, borderColor: COLORS.border, gap: 10 },
   searchInput: { flex: 1, paddingVertical: 13, fontSize: 15, color: COLORS.text },
   micPill: { backgroundColor: COLORS.primaryMid, padding: 8, borderRadius: 10 },
-
   filterChip: { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 20, borderWidth: 1.5, borderColor: COLORS.border, backgroundColor: COLORS.surface, marginRight: 8 },
   filterChipText: { fontSize: 13, fontWeight: '700', color: COLORS.textMid },
-
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
   chip: { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 20, borderWidth: 1.5, borderColor: COLORS.border, backgroundColor: COLORS.surface },
   chipActive: { borderColor: COLORS.primaryMid, backgroundColor: COLORS.primaryBg },
   chipText: { fontSize: 13, fontWeight: '700', color: COLORS.textMid },
   chipTextActive: { color: COLORS.primaryMid },
-
   productsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   productCard: { width: (SCREEN_WIDTH - 52) / 2, backgroundColor: COLORS.surface, borderRadius: 18, padding: 14, borderWidth: 1, borderColor: COLORS.borderLight },
   productCardEmoji: { width: '100%', height: 90, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
@@ -1956,7 +2404,6 @@ const S = StyleSheet.create({
   productCardPrice: { fontSize: 15, fontWeight: '900', marginTop: 3 },
   productCardMeta: { fontSize: 11, color: COLORS.textLight },
   productCardFarmer: { fontSize: 11, color: COLORS.textLight, marginTop: 3 },
-
   farmerCard: { flexDirection: 'row', backgroundColor: COLORS.surface, borderRadius: 20, padding: 16, marginBottom: 14, borderWidth: 1, borderColor: COLORS.borderLight },
   farmerAvatar: { width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center' },
   farmerAvatarText: { fontSize: 16, fontWeight: '900' },
@@ -1972,23 +2419,19 @@ const S = StyleSheet.create({
   cropPillText: { fontSize: 11, fontWeight: '700' },
   contactBtn: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 10, borderWidth: 1.5 },
   contactBtnText: { fontSize: 12, fontWeight: '800' },
-
   recCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 16, padding: 16, marginBottom: 10, borderWidth: 1, borderColor: COLORS.borderLight },
   recCardName: { fontSize: 15, fontWeight: '800', color: COLORS.text, marginBottom: 3 },
   recCardDesc: { fontSize: 12, color: COLORS.textLight },
-
   primaryBtn: { backgroundColor: COLORS.primaryMid, paddingVertical: 16, paddingHorizontal: 24, borderRadius: 16, alignItems: 'center', marginTop: 12 },
   primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '800', letterSpacing: 0.2 },
   secondaryBtn: { flex: 1, paddingVertical: 16, borderRadius: 16, alignItems: 'center', borderWidth: 1.5, borderColor: COLORS.border, backgroundColor: COLORS.surface },
   secondaryBtnText: { fontSize: 15, fontWeight: '800' },
-
   orderCard: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: COLORS.borderLight, borderLeftWidth: 4 },
   orderCrop: { fontSize: 14, fontWeight: '800', color: COLORS.text, marginBottom: 2 },
   orderMeta: { fontSize: 12, color: COLORS.textLight, marginTop: 2 },
   orderId: { fontSize: 11, color: COLORS.textLight, marginTop: 6, fontWeight: '700' },
   statusPill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
   statusPillText: { fontSize: 11, fontWeight: '800' },
-
   marketRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: COLORS.borderLight },
   marketCropName: { fontSize: 15, fontWeight: '700', color: COLORS.text },
   marketCropMeta: { fontSize: 12, color: COLORS.textLight, marginTop: 2 },
@@ -1996,19 +2439,16 @@ const S = StyleSheet.create({
   marketPrice: { fontSize: 16, fontWeight: '900', marginBottom: 8 },
   negotiateBtn: { borderWidth: 1.5, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5 },
   negotiateBtnTxt: { fontSize: 12, fontWeight: '800' },
-
   analyticsRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 16, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: COLORS.borderLight },
   analyticsCropName: { fontSize: 14, fontWeight: '800', color: COLORS.text },
   analyticsCropQty: { fontSize: 12, color: COLORS.textLight },
   analyticsCropSpend: { fontSize: 14, fontWeight: '800' },
   progressBg: { height: 5, backgroundColor: COLORS.borderLight, borderRadius: 3 },
   progressFill: { height: 5, borderRadius: 3 },
-
   photoUpload: { backgroundColor: COLORS.surface, borderWidth: 2, borderColor: COLORS.borderLight, borderStyle: 'dashed', borderRadius: 20, height: 160, justifyContent: 'center', alignItems: 'center', marginBottom: 16, overflow: 'hidden' },
   photoIconBox: { width: 64, height: 64, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
   photoUploadText: { fontSize: 14, fontWeight: '700', color: COLORS.text },
   photoUploadSub: { fontSize: 12, color: COLORS.textLight, marginTop: 4 },
-
   storeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   storeCard: { width: (SCREEN_WIDTH - 52) / 2, backgroundColor: COLORS.surface, borderRadius: 18, padding: 14, borderWidth: 1, borderColor: COLORS.borderLight },
   storeEmojiBox: { width: 52, height: 52, borderRadius: 14, backgroundColor: COLORS.primaryBg, justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
@@ -2020,14 +2460,12 @@ const S = StyleSheet.create({
   addCartBtnText: { color: '#fff', fontWeight: '800', fontSize: 12 },
   cartBadge: { position: 'absolute', top: -4, right: -4, backgroundColor: COLORS.danger, borderRadius: 8, width: 16, height: 16, justifyContent: 'center', alignItems: 'center' },
   cartBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
-
   newsCard: { borderRadius: 18, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: COLORS.borderLight },
   newsTagPill: { backgroundColor: 'rgba(0,0,0,0.07)', paddingHorizontal: 9, paddingVertical: 3, borderRadius: 8 },
   newsTagText: { fontSize: 11, fontWeight: '800', color: COLORS.textMid },
   newsTime: { fontSize: 11, color: COLORS.textLight },
   newsTitle: { fontSize: 14, fontWeight: '700', color: COLORS.text, lineHeight: 21, marginBottom: 8 },
   newsReadMore: { fontSize: 12, fontWeight: '800' },
-
   livePriceCard: { backgroundColor: COLORS.surface, borderRadius: 18, padding: 16, marginBottom: 16, borderWidth: 1.5, borderColor: COLORS.primaryLight, flexDirection: 'row', alignItems: 'center' },
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.primaryLight, marginRight: 6 },
   livePriceLabel: { fontSize: 12, color: COLORS.primaryMid, fontWeight: '700' },
@@ -2044,33 +2482,28 @@ const S = StyleSheet.create({
   aiAction: { fontSize: 20, fontWeight: '900', letterSpacing: 0.5, marginTop: 2 },
   aiReason: { fontSize: 14, color: COLORS.text, lineHeight: 22, padding: 16 },
   aiFooter: { paddingHorizontal: 16, paddingVertical: 10 },
-
   breakdownRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10 },
   breakdownLabel: { fontSize: 14, color: COLORS.textMid },
   breakdownValue: { fontSize: 15, fontWeight: '800' },
   profitSummary: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 14, borderRadius: 14, marginTop: 10 },
   profitSummaryLabel: { fontSize: 16, fontWeight: '800', color: COLORS.text },
   profitSummaryValue: { fontSize: 22, fontWeight: '900' },
-
   detailHero: { borderRadius: 24, height: 180, justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
   detailName: { fontSize: 24, fontWeight: '900', color: COLORS.text, letterSpacing: -0.5 },
   detailPrice: { fontSize: 22, fontWeight: '900', marginVertical: 8 },
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 11, borderBottomColor: COLORS.borderLight },
   detailRowLabel: { fontSize: 14, color: COLORS.textMid },
   detailRowValue: { fontSize: 14, fontWeight: '700', color: COLORS.text },
-
   chatBox: { backgroundColor: COLORS.surfaceAlt, borderRadius: 16, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: COLORS.borderLight },
   chatBubbleOther: { backgroundColor: COLORS.surface, padding: 12, borderRadius: 14, borderTopLeftRadius: 4, marginBottom: 8, alignSelf: 'flex-start', maxWidth: '80%', borderWidth: 1, borderColor: COLORS.borderLight },
   chatBubbleOtherText: { color: COLORS.text, fontSize: 13, lineHeight: 19 },
   chatBubbleSelf: { backgroundColor: COLORS.primaryBg, padding: 12, borderRadius: 14, borderTopRightRadius: 4, marginBottom: 8, alignSelf: 'flex-end', maxWidth: '80%' },
   chatBubbleSelfText: { color: COLORS.primaryMid, fontSize: 13, lineHeight: 19 },
-
   trackStep: { flexDirection: 'row', alignItems: 'center' },
   trackDot: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
   trackTitle: { fontSize: 15, fontWeight: '700', color: COLORS.text },
   trackTime: { fontSize: 12, color: COLORS.textLight, marginTop: 3 },
   trackLine: { width: 2, height: 28, backgroundColor: COLORS.primaryMid, marginLeft: 15, marginVertical: 4 },
-
   profileHero: { borderRadius: 24, padding: 28, alignItems: 'center', marginBottom: 16 },
   profileAvatar: { width: 84, height: 84, borderRadius: 42, justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
   profileAvatarText: { fontSize: 36, fontWeight: '900', color: '#fff' },

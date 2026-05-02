@@ -241,7 +241,7 @@ export default function LoginScreen({ onLogin, language = 'en', onLanguageChange
                 onLogin(selectedRole, { uid: cred.user.uid, name, phone, role: selectedRole, language });
             } else {
                 const cred = await signInWithEmailAndPassword(auth, email, password);
-                await updateUserProfile(cred.user.uid, { language });
+                await updateUserProfile(cred.user.uid, { language, role: selectedRole });
                 
                 // Fetch existing profile to get the stored name
                 const { getUserProfile } = require('./firebaseConfig');
@@ -251,7 +251,7 @@ export default function LoginScreen({ onLogin, language = 'en', onLanguageChange
                     uid: cred.user.uid, 
                     name: profile?.name || '', 
                     phone, 
-                    role: profile?.role || selectedRole, 
+                    role: selectedRole, 
                     language 
                 });
             }

@@ -122,19 +122,28 @@ export default function NearbyMandi({ navigateTo, t, role }) {
     try {
       const query = `market in ${cityToSearch}`;
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000); // 8s timeout for mobile
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=15`, {
-        headers: { 'User-Agent': 'KisanDirect/1.0 (contact@kisandirect.app)' },
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-      if (response.ok) {
-        data = await response.json();
-      } else {
-        console.warn("Nominatim API non-OK status");
+      const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout for mobile
+      try {
+        const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=15`, {
+          headers: { 'User-Agent': 'KisanDirect/1.0 (contact@kisandirect.app)' },
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (response.ok) {
+          data = await response.json();
+        } else {
+          console.warn("Nominatim non-OK:", response.status);
+        }
+      } catch (fetchErr) {
+        clearTimeout(timeout);
+        if (fetchErr.name === 'AbortError') {
+          // Timeout — silently fall through to mock fallback, no red warning needed
+        } else {
+          console.warn("Nominatim fetch error:", fetchErr.message);
+        }
       }
     } catch (error) {
-      console.warn("Nominatim fetch error:", error);
+      console.warn("Nominatim outer error:", error);
     }
 
     let results = [];
