@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  App.js  — KisanDirect  (updated with role-guard + auction + language fixes)
+//  App.js  — KisanDirect  (all fixes applied)
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -89,15 +89,16 @@ const MOCK_PRICE_DATA = {
 
 const MONTHS = ['Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr'];
 
+// ─── NEARBY_FARMERS — demo/sample only, NOT orderable ────────────────────
 const NEARBY_FARMERS = [
-  { id: 1, name: 'Ramesh Singh', village: 'Sanwer Village', dist: '2.5 km', rating: 4.8, reviews: 124, crops: ['🍅 Tomatoes', '🧅 Onions'], verified: true, avatar: 'RS', deliveries: 230, price: '₹38–42/kg', badge: 'Top Seller' },
-  { id: 2, name: 'Suresh Patel', village: 'Dewas Road', dist: '3.1 km', rating: 4.6, reviews: 89, crops: ['🥔 Potatoes', '🌽 Maize'], verified: true, avatar: 'SP', deliveries: 156, price: '₹22–28/kg', badge: 'Fast Delivery' },
-  { id: 3, name: 'Village Co-op', village: 'Palda', dist: '1.2 km', rating: 4.9, reviews: 312, crops: ['🌾 Wheat', '🫘 Soybean', '🌻 Mustard'], verified: true, avatar: 'VC', deliveries: 580, price: '₹20–48/kg', badge: 'Best Rated' },
-  { id: 4, name: 'Kisan Kumar', village: 'Ujjain Road', dist: '4.2 km', rating: 4.4, reviews: 67, crops: ['🥦 Cauliflower', '🌶️ Chilli', '🧄 Garlic'], verified: false, avatar: 'KK', deliveries: 98, price: '₹25–110/kg', badge: null },
-  { id: 5, name: 'Meena Devi', village: 'Mhow', dist: '5.8 km', rating: 4.7, reviews: 201, crops: ['🍚 Rice', '🧅 Onions'], verified: true, avatar: 'MD', deliveries: 345, price: '₹28–36/kg', badge: 'Organic' },
+  { id: 1, name: 'Ramesh Singh', village: 'Sanwer Village', dist: '2.5 km', rating: 4.8, reviews: 124, crops: ['🍅 Tomatoes', '🧅 Onions'], verified: true, avatar: 'RS', deliveries: 230, price: '₹38–42/kg', badge: 'Top Seller', uid: null },
+  { id: 2, name: 'Suresh Patel', village: 'Dewas Road', dist: '3.1 km', rating: 4.6, reviews: 89, crops: ['🥔 Potatoes', '🌽 Maize'], verified: true, avatar: 'SP', deliveries: 156, price: '₹22–28/kg', badge: 'Fast Delivery', uid: null },
+  { id: 3, name: 'Village Co-op', village: 'Palda', dist: '1.2 km', rating: 4.9, reviews: 312, crops: ['🌾 Wheat', '🫘 Soybean', '🌻 Mustard'], verified: true, avatar: 'VC', deliveries: 580, price: '₹20–48/kg', badge: 'Best Rated', uid: null },
+  { id: 4, name: 'Kisan Kumar', village: 'Ujjain Road', dist: '4.2 km', rating: 4.4, reviews: 67, crops: ['🥦 Cauliflower', '🌶️ Chilli', '🧄 Garlic'], verified: false, avatar: 'KK', deliveries: 98, price: '₹25–110/kg', badge: null, uid: null },
+  { id: 5, name: 'Meena Devi', village: 'Mhow', dist: '5.8 km', rating: 4.7, reviews: 201, crops: ['🍚 Rice', '🧅 Onions'], verified: true, avatar: 'MD', deliveries: 345, price: '₹28–36/kg', badge: 'Organic', uid: null },
 ];
 
-// ─── GLOBAL TRANSLATIONS (Fast cache for common terms) ────────────────────
+// ─── GLOBAL TRANSLATIONS ──────────────────────────────────────────────────
 const GLOBAL_TRANSLATIONS = {
   'Dashboard': { en: 'Dashboard', hi: 'डैशबोर्ड', mr: 'डॅशबोर्ड', ta: 'டாஷ்போர்டு', te: 'డాష్బోర్డు', bn: 'ড্যাশবোর্ড' },
   'Tools': { en: 'Tools', hi: 'औज़ार', mr: 'साधने', ta: 'கருவிகள்', te: 'సాధనాలు', bn: 'সরঞ্জাম' },
@@ -114,10 +115,10 @@ const GLOBAL_TRANSLATIONS = {
   'Distance': { en: 'Distance', hi: 'दूरी', mr: 'अंतर', ta: 'தூரம்', te: 'దూరం', bn: 'দূরত্ব' },
   'Contact Now': { en: 'Contact Now', hi: 'अभी संपर्क करें', mr: 'आता संपर्क करा', ta: 'இப்போது தொடர்பு கொள்ளவும்', te: 'ఇప్పుడు సంప్రదించండి', bn: 'এখনই যোগাযোগ করুন' },
   'Close': { en: 'Close', hi: 'बंद करें', mr: 'बंद करा', ta: 'மூடு', te: 'మూసివేయి', bn: 'বন্ধ করুন' },
-  'Buy Now': { en: 'Buy Now', hi: 'खरीदें', mr: 'आता खरेदी करा', ta: 'இப்போது வாங்கவும்', te: 'ఇప్పుడే కొనండి', bn: 'এখনই কিনুন' },
+  'Buy Now': { en: 'Buy Now', hi: 'खरीदें', mr: 'आता खरेदी करा', ta: 'இப்போது வாங்கவும்', te: 'ఇప్పుడే కొనండి', bn: 'এখনই కিনుন' },
 };
 
-// ─── DYNAMIC TRANSLATOR HOOK ─────────────────────────────────────────────
+// ─── DYNAMIC TRANSLATOR HOOK ──────────────────────────────────────────────
 const translationCache = {};
 const listeners = new Set();
 const notifyListeners = () => listeners.forEach(l => l());
@@ -219,7 +220,6 @@ export default function App() {
 
   const hasAutoLoggedRef = React.useRef(false);
 
-  // ── Role-aware auto-login ────────────────────────────────────────────────
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser && !hasAutoLoggedRef.current) {
@@ -246,13 +246,18 @@ export default function App() {
     unsubscribeRefs.current = [];
   };
 
-  // ── loadUserData — no manual token refresh or delay needed.
-  //    waitForAuth() inside each listener in firebaseConfig.js handles that.
   const loadUserData = (uid, userRole) => {
     setListingsLoading(true);
     stopListeners();
 
     if (userRole === 'farmer') {
+      getFarmerOrders(uid)
+        .then(orders => {
+          console.log('[KD] Direct fetch — farmer orders:', orders.length, 'uid:', uid);
+          setMyOrders(orders);
+        })
+        .catch(e => console.warn('[KD] Direct getFarmerOrders failed:', e.message));
+
       const unsubListings = listenFarmerListings(uid, (listings) => {
         setMyListings(listings.map(l => ({
           id: l.id,
@@ -273,8 +278,8 @@ export default function App() {
       });
       unsubscribeRefs.current.push(unsubAll);
 
-      // Real-time orders — farmer sees new orders the moment a buyer places one
       const unsubOrders = listenFarmerOrders(uid, (orders) => {
+        console.log('[KD] Real-time orders update:', orders.length);
         setMyOrders(orders);
       });
       unsubscribeRefs.current.push(unsubOrders);
@@ -288,7 +293,7 @@ export default function App() {
 
       getBuyerOrders(uid)
         .then(orders => setMyOrders(orders))
-        .catch(e => console.warn('getBuyerOrders error:', e));
+        .catch(e => console.warn('[KD] getBuyerOrders error:', e));
     }
   };
 
@@ -357,6 +362,7 @@ export default function App() {
     try { await signOut(auth); } catch (_) { }
     setRole(null); setCurrentUser(null);
     setMyListings([]); setMarketListings([]); setMyOrders([]);
+    hasAutoLoggedRef.current = false;
     navigateTo('onboarding');
   };
 
@@ -366,7 +372,7 @@ export default function App() {
     return COLORS.primaryMid;
   };
 
-  // ─── SHARED COMPONENTS ──────────────────────────────────────────────────
+  // ─── SHARED COMPONENTS ───────────────────────────────────────────────────
   const StatCard = ({ icon, label, value, color, bg }) => (
     <View style={[S.statCard, { backgroundColor: bg }]}>
       <Text style={{ fontSize: 20, marginBottom: 4 }}>{icon}</Text>
@@ -417,7 +423,7 @@ export default function App() {
     </View>
   );
 
-  // ─── SCREEN: FARMER DASHBOARD ────────────────────────────────────────────
+  // ─── SCREEN: FARMER DASHBOARD ─────────────────────────────────────────────
   const FarmerDashboard = () => (
     <View style={S.screen}>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.surface} />
@@ -662,7 +668,7 @@ export default function App() {
     </View>
   );
 
-  // ─── SCREEN: RETAILER DASHBOARD ──────────────────────────────────────────
+  // ─── SCREEN: RETAILER DASHBOARD ───────────────────────────────────────────
   const RetailerDashboard = () => {
     const RC = COLORS.retailerMid;
     const bulkOrders = [
@@ -826,7 +832,7 @@ export default function App() {
     );
   };
 
-  // ─── SCREEN: BUYER MARKETPLACE ───────────────────────────────────────────
+  // ─── SCREEN: BUYER MARKETPLACE ────────────────────────────────────────────
   const BuyerMarketplace = () => {
     const [activeTab, setActiveTab] = useState('market');
     const BC = COLORS.buyerMid;
@@ -899,7 +905,19 @@ export default function App() {
                   <View style={S.productsGrid}>
                     {marketListings.map((item, i) => (
                       <TouchableOpacity key={item.id || i} style={S.productCard} onPress={() => {
-                        const farmerObj = { name: item.farmerName, dist: '--', rating: 4.5, reviews: 0, crops: [item.emoji + ' ' + item.cropName], verified: true, avatar: (item.farmerName || '?').split(' ').map(w => w[0]).join(''), deliveries: 0, price: `₹${item.pricePerKg}/kg`, uid: item.farmerUid, id: item.farmerUid };
+                        const farmerObj = {
+                          name: item.farmerName,
+                          dist: '--',
+                          rating: 4.5,
+                          reviews: 0,
+                          crops: [item.emoji + ' ' + item.cropName],
+                          verified: true,
+                          avatar: (item.farmerName || '?').split(' ').map(w => w[0]).join(''),
+                          deliveries: 0,
+                          price: `₹${item.pricePerKg}/kg`,
+                          uid: item.farmerUid,
+                          id: item.farmerUid,
+                        };
                         setSelectedFarmer(farmerObj);
                         setSelectedProduct(item);
                         setChatMessages([{ from: 'farmer', text: t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।') + ' ' + item.emoji + ' ' + item.cropName + ' @ ₹' + item.pricePerKg + '/kg' }]);
@@ -923,7 +941,17 @@ export default function App() {
                             setCart(prev => {
                               const exists = prev.find(c => c.id === item.id);
                               if (exists) return prev.map(c => c.id === item.id ? { ...c, qty: c.qty + 1 } : c);
-                              return [...prev, { id: item.id, name: item.cropName, cropName: item.cropName, emoji: item.emoji || '🌿', price: item.pricePerKg, pricePerKg: item.pricePerKg, qty: 1, farmerName: item.farmerName, farmerUid: item.farmerUid }];
+                              return [...prev, {
+                                id: item.id,
+                                name: item.cropName,
+                                cropName: item.cropName,
+                                emoji: item.emoji || '🌿',
+                                price: item.pricePerKg,
+                                pricePerKg: item.pricePerKg,
+                                qty: 1,
+                                farmerName: item.farmerName,
+                                farmerUid: item.farmerUid,
+                              }];
                             });
                           }}
                         >
@@ -981,11 +1009,20 @@ export default function App() {
                 <Text style={[S.infoBoxTitle, { color: BC }]}>👨🏽‍🌾 {t('Nearby Verified Farmers', 'नज़दीकी सत्यापित किसान')}</Text>
                 <Text style={[S.infoBoxText, { color: BC }]}>{t('Buy directly, negotiate prices & build trust with local farmers.', 'सीधे खरीदें, कीमत तय करें।')}</Text>
               </View>
+
               {(() => {
                 const rfMap = {};
                 marketListings.forEach(l => {
                   if (l.farmerUid && !rfMap[l.farmerUid]) {
-                    rfMap[l.farmerUid] = { id: l.farmerUid, uid: l.farmerUid, name: l.farmerName || 'Farmer', crops: [], verified: true, avatar: (l.farmerName || '?').split(' ').map(w => w[0]).join(''), rating: 4.5, reviews: 0, dist: '--', deliveries: 0, price: '--', badge: null };
+                    rfMap[l.farmerUid] = {
+                      id: l.farmerUid,
+                      uid: l.farmerUid,
+                      name: l.farmerName || 'Farmer',
+                      crops: [],
+                      verified: true,
+                      avatar: (l.farmerName || '?').split(' ').map(w => w[0]).join(''),
+                      rating: 4.5, reviews: 0, dist: '--', deliveries: 0, price: '--', badge: null,
+                    };
                   }
                   if (l.farmerUid) rfMap[l.farmerUid].crops.push((l.emoji || '🌿') + ' ' + (l.cropName || ''));
                 });
@@ -1038,25 +1075,28 @@ export default function App() {
                                 navigateTo('productDetail');
                               }}
                             >
-                              <Text style={[S.contactBtnText, { color: '#fff' }]}>💬 {t('Chat', 'चैट')}</Text>
+                              <Text style={[S.contactBtnText, { color: '#fff' }]}>💬 {t('Chat & Order', 'चैट और ऑर्डर')}</Text>
                             </TouchableOpacity>
                           </View>
                         </View>
                       </TouchableOpacity>
                     ))}
-                    <Text style={[S.sectionTitle, { marginBottom: 12, marginTop: 16, color: COLORS.textLight }]}>📍 {t('Nearby Farmers', 'नज़दीकी किसान')}</Text>
+                    <Text style={[S.sectionTitle, { marginBottom: 8, marginTop: 16, color: COLORS.textLight }]}>📍 {t('Nearby Farmers', 'नज़दीकी किसान')}</Text>
+                    <View style={[S.infoBox, { backgroundColor: '#FFF8E1', borderColor: '#F9A825', marginBottom: 12 }]}>
+                      <Text style={{ fontSize: 12, color: '#E65100', fontWeight: '700' }}>
+                        ⚠️ {t('Sample profiles — to place a real order use the Market tab or Active Farmers above.', 'नमूना प्रोफाइल — असली ऑर्डर के लिए बाज़ार टैब या ऊपर सक्रिय किसान देखें।')}
+                      </Text>
+                    </View>
                   </>
                 );
               })()}
+
               {filteredFarmers.map((farmer) => (
                 <TouchableOpacity key={farmer.id} style={S.farmerCard}
-                  onPress={() => {
-                    setSelectedFarmer(farmer);
-                    setSelectedProduct(null);
-                    setChatMessages([{ from: 'farmer', text: `${t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।')} (${farmer.crops.join(', ')})` }]);
-                    setOfferPrice('');
-                    navigateTo('productDetail');
-                  }}
+                  onPress={() => Alert.alert(
+                    t('Sample Profile', 'नमूना प्रोफाइल'),
+                    t('This is a sample farmer profile. To order from real farmers, please use the Market tab.', 'यह एक नमूना प्रोफाइल है। असली किसानों से ऑर्डर के लिए बाज़ार टैब इस्तेमाल करें।')
+                  )}
                   activeOpacity={0.88}
                 >
                   <View style={[S.farmerAvatar, { backgroundColor: farmer.verified ? COLORS.primaryBg : COLORS.surfaceAlt }]}>
@@ -1070,6 +1110,9 @@ export default function App() {
                           <Text style={S.verifiedBadgeText}>✓ {t('Verified', 'सत्यापित')}</Text>
                         </View>
                       )}
+                      <View style={[S.verifiedBadge, { backgroundColor: '#FFF3E0' }]}>
+                        <Text style={[S.verifiedBadgeText, { color: COLORS.warning }]}>📋 {t('Sample', 'नमूना')}</Text>
+                      </View>
                     </View>
                     <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
                       <Text style={{ fontSize: 12, color: COLORS.accent }}>{'★'.repeat(Math.round(farmer.rating))}{'☆'.repeat(5 - Math.round(farmer.rating))}</Text>
@@ -1090,46 +1133,14 @@ export default function App() {
                         <Text style={S.farmerPriceRange}>{farmer.price}</Text>
                         <Text style={S.farmerDeliveries}>{farmer.deliveries} {t('deliveries', 'डिलीवरी')}</Text>
                       </View>
-                      {farmer.badge && (
-                        <View style={[S.farmerBadge, {
-                          backgroundColor: farmer.badge === 'Best Rated' ? '#FFF3E0' : farmer.badge === 'Organic' ? COLORS.primaryBg : COLORS.retailerBg,
-                        }]}>
-                          <Text style={[S.farmerBadgeText, {
-                            color: farmer.badge === 'Best Rated' ? COLORS.warning : farmer.badge === 'Organic' ? COLORS.primaryMid : COLORS.retailerMid,
-                          }]}>
-                            {farmer.badge === 'Best Rated' ? '⭐' : farmer.badge === 'Organic' ? '🌿' : '🚀'} {farmer.badge}
-                          </Text>
-                        </View>
-                      )}
-                      <TouchableOpacity
-                        style={[S.contactBtn, { borderColor: BC, backgroundColor: BC + '0D' }]}
-                        onPress={() => {
-                          setSelectedFarmer(farmer);
-                          setSelectedProduct(null);
-                          setChatMessages([{ from: 'farmer', text: `${t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।')} (${farmer.crops.join(', ')})` }]);
-                          setOfferPrice('');
-                          navigateTo('productDetail');
-                        }}
-                      >
-                        <Text style={[S.contactBtnText, { color: BC }]}>{t('Buy Now', 'खरीदें')}</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[S.contactBtn, { borderColor: BC, backgroundColor: BC + '0D', marginLeft: 8 }]}
-                        onPress={() => {
-                          setSelectedFarmer(farmer);
-                          setSelectedProduct(null);
-                          setChatMessages([{ from: 'farmer', text: `${t('Hello! I have fresh produce available.', 'नमस्ते! ताजा उपज उपलब्ध है।')} (${farmer.crops.join(', ')})` }]);
-                          setOfferPrice('');
-                          navigateTo('productDetail');
-                        }}
-                      >
-                        <Text style={[S.contactBtnText, { color: BC }]}>💬 {t('Chat', 'चैट')}</Text>
-                      </TouchableOpacity>
+                      <View style={[S.contactBtn, { borderColor: COLORS.borderLight, backgroundColor: COLORS.surfaceAlt }]}>
+                        <Text style={[S.contactBtnText, { color: COLORS.textLight }]}>📋 {t('Sample', 'नमूना')}</Text>
+                      </View>
                     </View>
                   </View>
                 </TouchableOpacity>
               ))}
-              {filteredFarmers.length === 0 && (
+              {filteredFarmers.length === 0 && Object.keys(marketListings.reduce((m, l) => { if (l.farmerUid) m[l.farmerUid] = true; return m; }, {})).length === 0 && (
                 <View style={{ alignItems: 'center', paddingVertical: 40 }}>
                   <Text style={{ fontSize: 40, marginBottom: 12 }}>🔍</Text>
                   <Text style={{ color: COLORS.textMid, fontSize: 16, fontWeight: '600' }}>{t('No farmers found', 'कोई किसान नहीं मिला')}</Text>
@@ -1142,7 +1153,7 @@ export default function App() {
     );
   };
 
-  // ─── SCREEN: AI CROP RECOMMENDATION ─────────────────────────────────────
+  // ─── SCREEN: AI CROP RECOMMENDATION ──────────────────────────────────────
   const AICropRec = () => {
     const soilOptions = ['Clay', 'Loamy', 'Sandy', 'Silty', 'Black'];
     const seasonOptions = [t('Kharif (Jun–Oct)', 'खरीफ (जून–अक्टू)'), t('Rabi (Nov–Mar)', 'रबी (नव–मार्च)'), t('Zaid (Mar–Jun)', 'जायद (मार्च–जून)')];
@@ -1230,7 +1241,7 @@ export default function App() {
     );
   };
 
-  // ─── SCREEN: PROFIT ESTIMATOR ────────────────────────────────────────────
+  // ─── SCREEN: PROFIT ESTIMATOR ─────────────────────────────────────────────
   const ProfitEstimator = () => {
     const allCrops = ['Tomato', 'Wheat', 'Rice', 'Potato', 'Onion', 'Garlic', 'Soybean', 'Mustard', 'Cotton', 'Cauliflower', 'Chilli', 'Maize'];
     const yieldPerAcre = { Tomato: 8000, Wheat: 1800, Rice: 2200, Potato: 10000, Onion: 12000, Garlic: 3000, Soybean: 1200, Mustard: 900, Cotton: 600, Cauliflower: 15000, Chilli: 2500, Maize: 2500 };
@@ -1318,7 +1329,7 @@ export default function App() {
     );
   };
 
-  // ─── SCREEN: AGRI STORE ──────────────────────────────────────────────────
+  // ─── SCREEN: AGRI STORE ───────────────────────────────────────────────────
   const AgriStore = () => {
     const storeItems = [
       { id: 1, name: t('Hybrid Tomato Seeds', 'हाइब्रिड टमाटर के बीज'), price: 320, unit: '50g packet', emoji: '🌱', category: t('Seeds', 'बीज') },
@@ -1385,7 +1396,7 @@ export default function App() {
     );
   };
 
-  // ─── SCREEN: FARMING NEWS ────────────────────────────────────────────────
+  // ─── SCREEN: FARMING NEWS ─────────────────────────────────────────────────
   const FarmingNews = () => {
     const news = [
       { id: 1, tag: t('Scheme', 'योजना'), title: t('PM Kisan: ₹2000 installment released for all registered farmers', 'PM किसान: सभी पंजीकृत किसानों के लिए ₹2000 की किस्त जारी'), time: t('2 hours ago', '2 घंटे पहले'), emoji: '💰', color: COLORS.primaryBg, link: 'https://pmkisan.gov.in' },
@@ -1401,7 +1412,7 @@ export default function App() {
         <ScrollView contentContainerStyle={S.scrollPad} showsVerticalScrollIndicator={false}>
           {news.map((item) => (
             <TouchableOpacity key={item.id} style={[S.newsCard, { backgroundColor: item.color }]}
-              onPress={() => Alert.alert(item.title, item.link ? `${t('Source', 'स्रोत')}: ${item.link}\n\n${t('Full article available at the link above.', 'पूरा लेख ऊपर दिए लिंक पर उपलब्ध है।')}` : t('Full article coming soon!', 'पूरा लेख जल्द आ रहा है!'))}>
+              onPress={() => Alert.alert(item.title, item.link ? `${t('Source', 'स्रोत')}: ${item.link}` : t('Full article coming soon!', 'पूरा लेख जल्द आ रहा है!'))}>
               <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
                 <Text style={{ fontSize: 22, marginRight: 10 }}>{item.emoji}</Text>
                 <View style={S.newsTagPill}><Text style={S.newsTagText}>{item.tag}</Text></View>
@@ -1416,7 +1427,7 @@ export default function App() {
     );
   };
 
-  // ─── SCREEN: PRICE HISTORY ───────────────────────────────────────────────
+  // ─── SCREEN: PRICE HISTORY ────────────────────────────────────────────────
   const PriceHistory = () => {
     const CROPS = ['Tomato', 'Wheat', 'Onion', 'Potato', 'Maize', 'Rice', 'Garlic', 'Soybean', 'Mustard', 'Cotton', 'Cauliflower', 'Chilli'];
     const CROP_EMOJI = { Tomato: '🍅', Wheat: '🌾', Onion: '🧅', Potato: '🥔', Maize: '🌽', Rice: '🍚', Garlic: '🧄', Soybean: '🫘', Mustard: '🌻', Cotton: '🪴', Cauliflower: '🥦', Chilli: '🌶️' };
@@ -1579,7 +1590,7 @@ export default function App() {
     );
   };
 
-  // ─── SCREEN: ADD PRODUCT ─────────────────────────────────────────────────
+  // ─── SCREEN: ADD PRODUCT ──────────────────────────────────────────────────
   const AddProductScreen = () => {
     const [localQty, setLocalQty] = useState('');
     const [localPrice, setLocalPrice] = useState('');
@@ -1669,7 +1680,7 @@ export default function App() {
     );
   };
 
-  // ─── SCREEN: PRODUCT DETAIL ──────────────────────────────────────────────
+  // ─── SCREEN: PRODUCT DETAIL ───────────────────────────────────────────────
   const ProductDetail = () => {
     const BC = COLORS.buyerMid;
     const farmer = selectedFarmer || {
@@ -1737,31 +1748,59 @@ export default function App() {
       }, 1200);
     };
 
+    // ── FIX: validate farmerUid before writing order ──────────────────────
     const handlePlaceOrder = async (pricePerKg) => {
       if (!currentUser?.uid) {
         Alert.alert(t('Login required', 'लॉगिन आवश्यक'), t('Please log in to place an order.', 'ऑर्डर करने के लिए लॉगिन करें।'));
         return;
       }
+
+      const rawUid = farmer.uid ?? farmer.id ?? null;
+      const resolvedFarmerUid =
+        typeof rawUid === 'string' && rawUid.trim().length > 10
+          ? rawUid.trim()
+          : null;
+
+      console.log('[KD] handlePlaceOrder — rawUid:', rawUid,
+        '| resolved:', resolvedFarmerUid,
+        '| listing.id:', listing?.id);
+
+      if (!resolvedFarmerUid) {
+        Alert.alert(
+          t('Cannot Place Order', 'ऑर्डर नहीं हो सकता'),
+          t('This is a sample profile. To place a real order, browse the Market tab and tap on a live listing.',
+            'यह एक नमूना प्रोफाइल है। असली ऑर्डर के लिए बाज़ार टैब से लाइव लिस्टिंग चुनें।')
+        );
+        return;
+      }
+
       setOrdering(true);
       const totalAmount = pricePerKg * qty;
       try {
         const orderId = await fbPlaceOrder({
           buyerUid: currentUser.uid,
           buyerName: currentUser.name || 'Buyer',
-          farmerUid: farmer.uid || farmer.id || 'unknown',
+          farmerUid: resolvedFarmerUid,
           farmerName: farmer.name,
           cropName, cropEmoji, qty, pricePerKg, totalAmount,
-          listingId: listing.id || null,
+          listingId: listing?.id || null,
         });
+        console.log('[KD] Order placed. orderId:', orderId, '| farmerUid:', resolvedFarmerUid);
         setMyOrders(prev => [{
           id: orderId, buyerUid: currentUser.uid, farmerName: farmer.name,
           cropName, cropEmoji, qty, pricePerKg, totalAmount, status: 'pending',
         }, ...prev]);
-        setOrderPlaced({ farmer, cropName, cropEmoji, qty, pricePerKg, total: totalAmount, orderId: '#' + orderId.slice(-5).toUpperCase() });
+        setOrderPlaced({
+          farmer, cropName, cropEmoji, qty, pricePerKg,
+          total: totalAmount, orderId: '#' + orderId.slice(-5).toUpperCase()
+        });
         navigateTo('orderTracking');
       } catch (e) {
-        console.error('placeOrder error:', e);
-        Alert.alert(t('Order Failed', 'ऑर्डर विफल'), t('Could not place order. Please try again.', 'ऑर्डर नहीं हो सका। दोबारा कोशिश करें।'));
+        console.error('[KD] placeOrder error:', e);
+        Alert.alert(
+          t('Order Failed', 'ऑर्डर विफल'),
+          t('Could not place order. Please try again.', 'ऑर्डर नहीं हो सका। दोबारा कोशिश करें।') + '\n\n' + e.message
+        );
       }
       setOrdering(false);
     };
@@ -1801,7 +1840,7 @@ export default function App() {
           </View>
 
           <View style={[S.formCard, { marginTop: 12 }]}>
-            <Text style={[S.sectionHeader, { marginBottom: 12 }]}>💬 {t('Negotiate Price', 'कीमत तय करें')}</Text>
+            <Text style={[S.sectionTitle, { marginBottom: 12 }]}>💬 {t('Negotiate Price', 'कीमत तय करें')}</Text>
             <View style={S.chatBox}>
               {localChat.map((msg, i) => (
                 msg.from === 'farmer'
@@ -1845,7 +1884,7 @@ export default function App() {
     );
   };
 
-  // ─── SCREEN: ORDER TRACKING ──────────────────────────────────────────────
+  // ─── SCREEN: ORDER TRACKING ───────────────────────────────────────────────
   const OrderTracking = () => {
     const BC = COLORS.buyerMid;
     const order = orderPlaced || {
@@ -1866,16 +1905,16 @@ export default function App() {
             <View style={S.trackStep}>
               <View style={[S.trackDot, { backgroundColor: COLORS.primaryMid }]}><Text style={{ color: '#fff', fontSize: 12 }}>✓</Text></View>
               <View style={{ flex: 1, marginLeft: 14 }}>
-                <Text style={S.trackTitle}>{t('Order Accepted', 'ऑर्डर स्वीकार')}</Text>
-                <Text style={S.trackTime}>10:00 AM</Text>
+                <Text style={S.trackTitle}>{t('Order Placed', 'ऑर्डर दिया गया')}</Text>
+                <Text style={S.trackTime}>{t('Just now', 'अभी')}</Text>
               </View>
             </View>
             <View style={S.trackLine} />
             <View style={S.trackStep}>
-              <View style={[S.trackDot, { backgroundColor: COLORS.primaryMid }]}><Text style={{ color: '#fff', fontSize: 12 }}>🚚</Text></View>
+              <View style={[S.trackDot, { backgroundColor: COLORS.borderLight }]}><Text style={{ color: COLORS.textLight, fontSize: 12 }}>⏳</Text></View>
               <View style={{ flex: 1, marginLeft: 14 }}>
-                <Text style={S.trackTitle}>{t('Out for Delivery', 'डिलीवरी के लिए निकला')}</Text>
-                <Text style={S.trackTime}>11:30 AM</Text>
+                <Text style={[S.trackTitle, { color: COLORS.textLight }]}>{t('Awaiting Farmer Confirmation', 'किसान की पुष्टि का इंतज़ार')}</Text>
+                <Text style={S.trackTime}>{t('Pending', 'बाकी')}</Text>
               </View>
             </View>
             <View style={[S.trackLine, { backgroundColor: COLORS.borderLight }]} />
@@ -1883,7 +1922,7 @@ export default function App() {
               <View style={[S.trackDot, { backgroundColor: COLORS.borderLight }]}><Text style={{ color: COLORS.textLight, fontSize: 12 }}>📦</Text></View>
               <View style={{ flex: 1, marginLeft: 14 }}>
                 <Text style={[S.trackTitle, { color: COLORS.textLight }]}>{t('Delivered', 'पहुंचा दिया गया')}</Text>
-                <Text style={S.trackTime}>{t('Est. 12:45 PM', 'अनुमानित 12:45 PM')}</Text>
+                <Text style={S.trackTime}>{t('Est. after confirmation', 'पुष्टि के बाद')}</Text>
               </View>
             </View>
           </View>
@@ -1901,7 +1940,7 @@ export default function App() {
     );
   };
 
-  // ─── SCREEN: PROFILE ─────────────────────────────────────────────────────
+  // ─── SCREEN: PROFILE ──────────────────────────────────────────────────────
   const ProfileScreen = () => {
     const isFarmer = role === 'farmer';
     const isRetailer = role === 'retailer';
@@ -1923,7 +1962,8 @@ export default function App() {
     });
     const realFarmers = Object.values(realFarmersMap);
 
-    const buyerCartTotal = cart.reduce((sum, c) => sum + c.price * c.qty, 0);
+    const buyerCartTotal = cart.reduce((sum, c) => sum + (c.price || c.pricePerKg || 0) * c.qty, 0);
+    const [checkingOut, setCheckingOut] = React.useState(false);
 
     const updateCartQty = (itemId, delta) => {
       setCart(prev => prev.map(c => {
@@ -1931,6 +1971,74 @@ export default function App() {
         const newQty = c.qty + delta;
         return newQty > 0 ? { ...c, qty: newQty } : c;
       }).filter(c => c.qty > 0));
+    };
+
+    // ── FIX: real checkout that writes orders to Firestore ────────────────
+    const handleCheckout = async () => {
+      if (cart.length === 0 || !currentUser?.uid) return;
+      setCheckingOut(true);
+      try {
+        // Group cart items by farmerUid
+        const farmerGroups = {};
+        const invalidItems = [];
+
+        cart.forEach(item => {
+          const fUid = item.farmerUid;
+          if (!fUid || typeof fUid !== 'string' || fUid.trim().length < 10) {
+            invalidItems.push(item.cropName || item.name);
+            return;
+          }
+          if (!farmerGroups[fUid]) farmerGroups[fUid] = [];
+          farmerGroups[fUid].push(item);
+        });
+
+        const farmerUids = Object.keys(farmerGroups);
+
+        if (farmerUids.length === 0) {
+          Alert.alert(
+            t('Cannot Checkout', 'चेकआउट नहीं हो सकता'),
+            t('No valid items in cart. Please add items from the Market tab.', 'कार्ट में कोई वैध आइटम नहीं। बाज़ार टैब से जोड़ें।')
+          );
+          setCheckingOut(false);
+          return;
+        }
+
+        // Place one order per farmer
+        for (const fUid of farmerUids) {
+          const items = farmerGroups[fUid];
+          const firstItem = items[0];
+          const totalQty = items.reduce((s, i) => s + i.qty, 0);
+          const totalAmount = items.reduce((s, i) => s + (i.price || i.pricePerKg || 0) * i.qty, 0);
+          const pricePerKg = items.length === 1
+            ? (firstItem.price || firstItem.pricePerKg || 0)
+            : Math.round(totalAmount / totalQty);
+
+          await fbPlaceOrder({
+            buyerUid: currentUser.uid,
+            buyerName: currentUser.name || 'Buyer',
+            farmerUid: fUid.trim(),
+            farmerName: firstItem.farmerName || 'Farmer',
+            cropName: items.length === 1 ? (firstItem.cropName || firstItem.name) : `${items.length} items`,
+            cropEmoji: items.length === 1 ? (firstItem.emoji || '🌿') : '🛒',
+            qty: totalQty,
+            pricePerKg,
+            totalAmount,
+            listingId: items.length === 1 ? (firstItem.id || null) : null,
+          });
+        }
+
+        setCart([]);
+
+        const msg = invalidItems.length > 0
+          ? t(`Order placed! Note: ${invalidItems.join(', ')} could not be ordered (sample items).`, `ऑर्डर हो गया! नोट: ${invalidItems.join(', ')} ऑर्डर नहीं हो सका।`)
+          : t('Farmer(s) will confirm your order soon.', 'किसान जल्द आपका ऑर्डर स्वीकार करेंगे।');
+
+        Alert.alert('✅ ' + t('Order Placed!', 'ऑर्डर हो गया!'), msg);
+      } catch (e) {
+        console.error('[KD] checkout error:', e);
+        Alert.alert(t('Checkout Failed', 'चेकआउट विफल'), e.message);
+      }
+      setCheckingOut(false);
     };
 
     return (
@@ -1950,6 +2058,7 @@ export default function App() {
               </Text>
             </View>
           </View>
+
           <View style={S.formCard}>
             <Text style={S.cardSectionTitle}>{t('Account Details', 'खाता विवरण')}</Text>
             {[
@@ -1985,6 +2094,10 @@ export default function App() {
                       <View style={{ flex: 1 }}>
                         <Text style={{ fontSize: 14, fontWeight: '700', color: COLORS.text }}>{item.cropName || item.name}</Text>
                         <Text style={{ fontSize: 12, color: COLORS.textLight }}>{item.farmerName || ''}</Text>
+                        {/* Show warning if item has no valid farmerUid */}
+                        {(!item.farmerUid || typeof item.farmerUid !== 'string' || item.farmerUid.length < 10) && (
+                          <Text style={{ fontSize: 10, color: COLORS.warning, fontWeight: '700' }}>⚠️ Sample item — cannot order</Text>
+                        )}
                       </View>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginRight: 12 }}>
                         <TouchableOpacity onPress={() => updateCartQty(item.id, -1)} style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: COLORS.borderLight, justifyContent: 'center', alignItems: 'center' }}>
@@ -1995,15 +2108,25 @@ export default function App() {
                           <Text style={{ fontSize: 16, fontWeight: '800', color: '#fff' }}>+</Text>
                         </TouchableOpacity>
                       </View>
-                      <Text style={{ fontSize: 14, fontWeight: '800', color: accent, minWidth: 60, textAlign: 'right' }}>₹{(item.price || item.pricePerKg || 0) * item.qty}</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '800', color: accent, minWidth: 60, textAlign: 'right' }}>
+                        ₹{(item.price || item.pricePerKg || 0) * item.qty}
+                      </Text>
                     </View>
                   ))}
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, paddingTop: 12, borderTopWidth: 1.5, borderTopColor: COLORS.border }}>
                     <Text style={{ fontSize: 16, fontWeight: '800', color: COLORS.text }}>{t('Total', 'कुल')}</Text>
                     <Text style={{ fontSize: 20, fontWeight: '900', color: accent }}>₹{buyerCartTotal.toLocaleString()}</Text>
                   </View>
-                  <TouchableOpacity style={[S.primaryBtn, { backgroundColor: accent, marginTop: 12 }]} onPress={() => { Alert.alert('✅ ' + t('Order Placed!', 'ऑर्डर हो गया!'), t('Your order has been placed successfully.', 'आपका ऑर्डर सफलतापूर्वक हो गया।')); setCart([]); }} activeOpacity={0.88}>
-                    <Text style={S.primaryBtnText}>{t('Checkout', 'चेकआउट')} — ₹{buyerCartTotal.toLocaleString()}</Text>
+                  <TouchableOpacity
+                    style={[S.primaryBtn, { backgroundColor: accent, marginTop: 12, opacity: checkingOut ? 0.7 : 1 }]}
+                    onPress={handleCheckout}
+                    disabled={checkingOut}
+                    activeOpacity={0.88}
+                  >
+                    {checkingOut
+                      ? <ActivityIndicator color="#fff" />
+                      : <Text style={S.primaryBtnText}>{t('Checkout', 'चेकआउट')} — ₹{buyerCartTotal.toLocaleString()}</Text>
+                    }
                   </TouchableOpacity>
                 </>
               )}
@@ -2181,7 +2304,6 @@ export default function App() {
               const rain5d = data.daily.precipitation_sum?.reduce((s, v) => s + v, 0) || 0;
               const maxTemp = Math.max(...(data.daily.temperature_2m_max || [0]));
               const minTemp = Math.min(...(data.daily.temperature_2m_min || [40]));
-
               if (rain5d > 20) tips.push({ icon: '🌧️', tip: t('Heavy rain expected — delay sowing, ensure drainage channels are clear.', 'भारी बारिश आने वाली है — बुआई रोकें, नालियाँ साफ़ रखें।'), color: '#1565C0' });
               else if (rain5d > 5) tips.push({ icon: '💧', tip: t('Light rain ahead — good time for transplanting. Reduce irrigation.', 'हल्की बारिश आएगी — रोपाई का अच्छा समय। सिंचाई कम करें।'), color: '#2196F3' });
               else tips.push({ icon: '☀️', tip: t('Dry days ahead — ensure regular irrigation for standing crops.', 'सूखे दिन आएंगे — खड़ी फ़सल की सिंचाई नियमित रखें।'), color: '#FF8F00' });
@@ -2315,7 +2437,7 @@ export default function App() {
   );
 }
 
-// ─── STYLES ───────────────────────────────────────────────────────────────
+// ─── STYLES ──────────────────────────────────────────────────────────────────
 const S = StyleSheet.create({
   mainWrapper: { flex: 1, backgroundColor: COLORS.bg },
   screen: { flex: 1, backgroundColor: COLORS.bg },
@@ -2386,7 +2508,6 @@ const S = StyleSheet.create({
   cardSectionTitle: { fontSize: 15, fontWeight: '800', color: COLORS.text, marginBottom: 14 },
   inputLabel: { fontSize: 13, fontWeight: '700', color: COLORS.textMid, marginBottom: 8, letterSpacing: 0.1 },
   input: { backgroundColor: COLORS.surfaceAlt, borderWidth: 1.5, borderColor: COLORS.border, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 13, fontSize: 15, color: COLORS.text },
-  micOverlay: { position: 'absolute', right: 4, backgroundColor: COLORS.primaryMid, padding: 10, borderRadius: 10 },
   searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, marginHorizontal: 20, marginVertical: 12, paddingHorizontal: 14, borderRadius: 16, borderWidth: 1.5, borderColor: COLORS.border, gap: 10 },
   searchInput: { flex: 1, paddingVertical: 13, fontSize: 15, color: COLORS.text },
   micPill: { backgroundColor: COLORS.primaryMid, padding: 8, borderRadius: 10 },
