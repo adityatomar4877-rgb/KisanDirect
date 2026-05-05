@@ -152,7 +152,7 @@ export default function AuctionScreen({ navigateTo, t, isFarmer, currentUser }) 
             )}
 
             {isFarmer && auction.status === 'Live' && activeTab === 'my' && (
-              <TouchableOpacity style={[S.bidBtn, { backgroundColor: COLORS.success, marginTop: 12, paddingVertical: 12 }]} onPress={() => Alert.alert('Accept', 'Bid Accepted!')}>
+              <TouchableOpacity style={[S.bidBtn, { backgroundColor: COLORS.success, marginTop: 12, paddingVertical: 12 }]} onPress={() => Alert.alert('Accept', 'स्वीकारें')}>
                 <Text style={S.bidBtnText}>{t('Accept ₹' + auction.highestBid, '₹' + auction.highestBid + ' स्वीकार करें')}</Text>
               </TouchableOpacity>
             )}

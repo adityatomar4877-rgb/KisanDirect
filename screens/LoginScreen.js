@@ -13,7 +13,7 @@ import {
     FlatList,
 } from 'react-native';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
-import { auth, saveUserProfile, updateUserProfile } from './firebaseConfig';
+import { auth, saveUserProfile, updateUserProfile, getUserProfile } from '../services/firebase';
 
 // ─────────────────────────────────────────────
 //  TRANSLATIONS
@@ -244,7 +244,6 @@ export default function LoginScreen({ onLogin, language = 'en', onLanguageChange
                 await updateUserProfile(cred.user.uid, { language, role: selectedRole });
                 
                 // Fetch existing profile to get the stored name
-                const { getUserProfile } = require('./firebaseConfig');
                 const profile = await getUserProfile(cred.user.uid);
                 
                 onLogin(selectedRole, { 
